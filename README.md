@@ -10,7 +10,7 @@ Opens http://localhost:8080 in your browser. Any static file server works too, e
 
 ## Controls
 
-A/D move, Shift sprint, Space jump, left click aims and shoots, Esc pauses. Abilities are found in the world. The gray box in the underground room grants a double jump. The glowing box in the sky room grants the power shot, hold left click to charge it and release to fire.
+A/D move, Shift sprint, Space jump, left click aims and shoots, Esc pauses. Abilities are found in the world.
 
 ## Assets
 
