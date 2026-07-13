@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Arrowvania</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- Top bar: Health (left) -->
+  <header class="hud hud-top">
+    <div class="hud-inner">
+      <span class="hud-group hud-health">
+        <span class="hud-label">Health</span>
+        <span id="health-value" class="hud-value">99</span>
+      </span>
+    </div>
+  </header>
+
+  <!-- Stage holds the game canvas; the minimap is drawn on the canvas itself -->
+  <main class="stage">
+    <div class="play-area">
+      <canvas id="game" tabindex="0"></canvas>
+    </div>
+  </main>
+
+  <!-- Bottom bar: control hints (left) and sound controls (right) -->
+  <footer class="hud hud-bottom">
+    <div class="hud-inner">
+      <span class="hud-controls">
+        <span class="key-hint"><span class="key-cap">A</span><span class="key-cap">D</span><span class="kh-word">Move</span></span>
+        <span class="key-hint"><span class="key-cap">Shift</span><span class="kh-word">Sprint</span></span>
+        <span class="key-hint"><span class="key-cap">Space</span><span class="kh-word">Jump</span></span>
+        <span class="key-hint"><span class="key-cap">L-Click</span><span class="kh-word">Aim / Shoot</span></span>
+        <span class="key-hint"><span class="key-cap">Esc</span><span class="kh-word">Pause</span></span>
+      </span>
+      <span class="hud-group hud-sound-group">
+        <span class="hud-sound">
+          <span class="hud-label">Music</span>
+          <button id="music-mute-btn" class="sound-btn" type="button" title="Mute / unmute music">&#128266;</button>
+          <input id="music-slider" class="volume-slider" type="range" min="0" max="100" value="50" title="Music volume">
+        </span>
+        <span class="hud-sound">
+          <span class="hud-label">SFX</span>
+          <button id="sfx-mute-btn" class="sound-btn" type="button" title="Mute / unmute sound effects">&#128266;</button>
+          <input id="sfx-slider" class="volume-slider" type="range" min="0" max="100" value="50" title="Sound-effect volume">
+        </span>
+      </span>
+    </div>
+  </footer>
+
+  <script src="assets.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>
