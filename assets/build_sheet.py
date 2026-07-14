@@ -170,7 +170,8 @@ def main():
     WIDE = 288*SS; PAD = 72*SS
     specs = [('_IDLE',None),('_WALK',None),('_RUN',None),('_JUMP',None),
              ('_ATTACK',TORSO),
-             ('_IDLE',LEGS),('_WALK',LEGS),('_RUN',LEGS),('_JUMP',LEGS)]
+             ('_IDLE',LEGS),('_WALK',LEGS),('_RUN',LEGS),('_JUMP',LEGS),
+             ('_HURT',None)]
     wide_rows, minx, maxx = [], WIDE, 0
     for anim, names in specs:
         row = []
@@ -214,7 +215,7 @@ def main():
     old = open(os.path.join(root,'assets.js')).read()
     def keep(key):
         m = re.search('"%s": "(data:image/png;base64,[^"]+)"' % key, old)
-        return m.group(1)
+        return m.group(1) if m else None
     def durl(img):
         b = io.BytesIO(); img.save(b,'PNG',optimize=True)
         return 'data:image/png;base64,' + base64.b64encode(b.getvalue()).decode()
@@ -222,15 +223,20 @@ def main():
     import json
     meta = {
         'FRAME_W': FRAME_W, 'FRAME_H': FRAME_H, 'FRAMES': FRAMES,
-        'ROWS': ['IDLE','WALK','RUN','JUMP','ATTACK_TORSO','LEGS_IDLE','LEGS_WALK','LEGS_RUN','LEGS_JUMP'],
+        'ROWS': ['IDLE','WALK','RUN','JUMP','ATTACK_TORSO','LEGS_IDLE','LEGS_WALK','LEGS_RUN','LEGS_JUMP','HURT'],
         'TILE': 64, 'anchorX': anchor_x, 'anchorY': ANCHOR_Y, 'bodyH': 128, 'bodyW': 64,   # anchors in sheet px
         'SPRITE_SCALE': SS,
         'BOWARM_W': K, 'BOWARM_H': K, 'BOWARM_PX': PV, 'BOWARM_PY': PV,
         'SHOULDER': sh,
         'archer': durl(sheet), 'bowarm': durl(strip),
         'grass': keep('grass'), 'dirt': keep('dirt'), 'arrow': keep('arrow'),
-        'bark': keep('bark'), 'leaf': keep('leaf'),
+        'bark': keep('bark'), 'leaf': keep('leaf'), 'knight': keep('knight'),
     }
+    mk = re.search(r'"KNIGHT": (\{[^}]*\})', old)
+    if mk: meta['KNIGHT'] = json.loads(mk.group(1))
+    for m in re.finditer(r'"(sfx_\w+)": "(data:audio/wav;base64,[^"]+)"', old):
+        meta[m.group(1)] = m.group(2)   # keep baked sound effects
+    meta = {k: v for k, v in meta.items() if v is not None}
     js = '// Auto-generated game assets (base64 PNGs + sprite metadata). Rebuild: assets/build_sheet.py\nconst ASSETS = ' + json.dumps(meta) + ';\n'
     open(os.path.join(root,'assets.js'),'w').write(js)
     print('sheet', sheet.size, 'strip', strip.size)
