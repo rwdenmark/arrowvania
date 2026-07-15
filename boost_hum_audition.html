@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Energy hum - lower octave choices</title>
+<style>
+  :root{ --bg:#14171c; --panel:#1c2129; --edge:#2b3340; --text:#e8ecf0; --muted:#8a94a2; --accent:#60e0d0; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--bg); color:var(--text); font-family:ui-monospace,Menlo,Consolas,monospace; padding:32px 20px; }
+  h1{ font-size:20px; margin:0 0 4px; }
+  p.sub{ color:var(--muted); margin:0 0 24px; font-size:13px; max-width:640px; line-height:1.5; }
+  .grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:14px; max-width:900px; }
+  .card{ background:var(--panel); border:1px solid var(--edge); border-radius:10px; padding:16px; }
+  .card h2{ font-size:15px; margin:0 0 4px; color:var(--accent); }
+  .card p{ font-size:12px; color:var(--muted); margin:0 0 14px; line-height:1.4; min-height:34px; }
+  button{ width:100%; padding:12px; font-family:inherit; font-size:14px; cursor:pointer;
+          background:transparent; color:var(--accent); border:1px solid var(--accent); border-radius:6px; }
+  button:hover{ background:rgba(96,224,208,0.12); }
+</style>
+</head>
+<body>
+  <h1>Energy hum &mdash; lower octaves</h1>
+  <p class="sub">The boost energy hum dropped down, in a few depths and tones. #1 is a straight octave down from the original. Loops while boosting in game. Tell me the number.</p>
+  <div class="grid" id="grid"></div>
+
+<script>
+let AC=null;
+function ctx(){ if(!AC) AC=new (window.AudioContext||window.webkitAudioContext)(); if(AC.state==='suspended') AC.resume(); return AC; }
+const bus=()=>{ const ac=ctx(); const g=ac.createGain(); g.gain.value=0.8; g.connect(ac.destination); return g; };
+const DUR=1.4;
+// energy hum: saw sweeping sawLo->sawHi over a sub, filter opening lpLo->lpHi
+function hum(o){
+  const ac=ctx(),t=ac.currentTime,out=bus();
+  const sub=ac.createOscillator(); sub.type='sine'; sub.frequency.value=o.sub; const sgn=ac.createGain(); sgn.gain.value=o.subGain; sub.connect(sgn).connect(out); sub.start(t); sub.stop(t+DUR);
+  const s=ac.createOscillator(); s.type='sawtooth'; s.frequency.setValueAtTime(o.sawLo,t); s.frequency.linearRampToValueAtTime(o.sawHi,t+0.4);
+  const lp=ac.createBiquadFilter(); lp.type='lowpass'; lp.Q.value=4; lp.frequency.setValueAtTime(o.lpLo,t); lp.frequency.exponentialRampToValueAtTime(o.lpHi,t+0.6);
+  const g=ac.createGain(); g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(o.peak,t+0.05); g.gain.setValueAtTime(o.peak,t+DUR-0.2); g.gain.exponentialRampToValueAtTime(0.0001,t+DUR);
+  s.connect(lp).connect(g).connect(out); s.start(t); s.stop(t+DUR);
+}
+const variants = [
+  { n:'1 - Down one octave',        d:'A straight octave below the original. Fuller, still bright.', o:{ sawLo:90, sawHi:160, sub:45, subGain:0.32, lpLo:500, lpHi:1900, peak:0.32 } },
+  { n:'2 - One octave, warmer',     d:'Same low pitch, filter kept darker for a rounder tone.',      o:{ sawLo:90, sawHi:160, sub:45, subGain:0.34, lpLo:380, lpHi:1200, peak:0.34 } },
+  { n:'3 - One octave, sub-heavy',  d:'Octave down with a heavier sub underneath.',                  o:{ sawLo:90, sawHi:160, sub:44, subGain:0.5,  lpLo:420, lpHi:1400, peak:0.3  } },
+  { n:'4 - Octave and a half down', d:'Deeper than #1, in between an octave and two.',               o:{ sawLo:64, sawHi:113, sub:38, subGain:0.4,  lpLo:340, lpHi:1200, peak:0.32 } },
+  { n:'5 - Two octaves down',       d:'Very deep, growly boost drone.',                              o:{ sawLo:45, sawHi:80,  sub:32, subGain:0.45, lpLo:280, lpHi:950,  peak:0.34 } },
+];
+const grid=document.getElementById('grid');
+variants.forEach(v=>{ const c=document.createElement('div'); c.className='card';
+  const h=document.createElement('h2'); h.textContent=v.n; const p=document.createElement('p'); p.textContent=v.d;
+  const b=document.createElement('button'); b.textContent='Play'; b.addEventListener('click',()=>{ try{ hum(v.o); }catch(e){ console.error(e); } });
+  c.appendChild(h); c.appendChild(p); c.appendChild(b); grid.appendChild(c); });
+</script>
+</body>
+</html>

@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bomb audition - sprites, explosions, sounds</title>
+<style>
+  :root{ --bg:#14171c; --panel:#1c2129; --edge:#2b3340; --text:#e8ecf0; --muted:#8a94a2; --accent:#60e0d0; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; background:var(--bg); color:var(--text); font-family:ui-monospace,Menlo,Consolas,monospace; padding:28px 20px; }
+  h1{ font-size:20px; margin:0 0 4px; }
+  h2{ font-size:15px; margin:28px 0 12px; color:var(--accent); border-bottom:1px solid var(--edge); padding-bottom:6px; }
+  p.sub{ color:var(--muted); margin:0 0 8px; font-size:13px; max-width:720px; line-height:1.5; }
+  .grid{ display:grid; grid-template-columns:repeat(auto-fill,minmax(180px,1fr)); gap:14px; max-width:1000px; }
+  .card{ background:var(--panel); border:1px solid var(--edge); border-radius:10px; padding:14px; text-align:center; }
+  .card h3{ font-size:13px; margin:0 0 10px; color:var(--accent); }
+  canvas{ background:#0e1116; border:1px solid var(--edge); border-radius:6px; image-rendering:pixelated; }
+  button{ margin-top:10px; width:100%; padding:9px; font-family:inherit; font-size:13px; cursor:pointer;
+          background:transparent; color:var(--accent); border:1px solid var(--accent); border-radius:6px; }
+  button:hover{ background:rgba(96,224,208,0.12); }
+  .note{ color:var(--muted); font-size:11px; margin-top:6px; }
+</style>
+</head>
+<body>
+  <h1>Bomb audition</h1>
+  <p class="sub">Pick one sprite, one explosion, and one sound. The sprites are drawn at the small in-game size then shown zoomed 9x; each card also shows the true size (the little dot) beside a bark-brown tile for scale. Tell me the three numbers and I'll add the bomb (Q to drop), the pickup box by the Power Shot, and the blast damage.</p>
+
+  <h2>1 &mdash; Bomb sprites (small, ~14px in game)</h2>
+  <div class="grid" id="sprites"></div>
+
+  <h2>2 &mdash; Explosion animations (one tile, auto-looping)</h2>
+  <div class="grid" id="explosions"></div>
+
+  <h2>3 &mdash; Detonation sounds</h2>
+  <div class="grid" id="sounds"></div>
+
+<script>
+// ---------- helpers ----------
+function disc(g,cx,cy,r,col){ g.fillStyle=col; for(let y=-Math.ceil(r);y<=r;y++)for(let x=-Math.ceil(r);x<=r;x++) if(x*x+y*y<=r*r) g.fillRect(cx+x,cy+y,1,1); }
+function px(g,x,y,col){ g.fillStyle=col; g.fillRect(x,y,1,1); }
+
+// ---------- 6 bomb sprites (drawn in a 16x16 logical grid) ----------
+const bombs = [
+  // 1 classic round
+  g=>{ disc(g,8,10,5,'#2a2a30'); disc(g,6,8,1.4,'#4b4b55'); g.fillStyle='#5a3a1a'; g.fillRect(9,4,1,3); px(g,10,3,'#ffd24a'); px(g,9,2,'#ff8a1a'); },
+  // 2 metal band
+  g=>{ disc(g,8,10,5,'#24242a'); g.fillStyle='#6b6b74'; g.fillRect(3,10,11,2); px(g,4,10,'#3a3a42'); px(g,11,11,'#3a3a42'); g.fillStyle='#5a3a1a'; g.fillRect(9,4,1,3); px(g,10,3,'#ffe27a'); px(g,10,2,'#ff8a1a'); },
+  // 3 grenade (segmented)
+  g=>{ disc(g,8,10,4,'#3c5232'); g.fillStyle='#27361d'; g.fillRect(5,9,7,1); g.fillRect(5,12,7,1); g.fillRect(7,7,1,7); g.fillRect(10,7,1,7); g.fillStyle='#59594a'; g.fillRect(7,4,4,2); g.fillStyle='#7a7a6a'; g.fillRect(10,3,1,4); },
+  // 4 sci-fi orb
+  g=>{ disc(g,8,10,5,'#123039'); disc(g,8,10,3,'#1f7aa6'); disc(g,8,10,1.5,'#a6ecff'); px(g,7,8,'#e6fbff'); g.fillStyle='#0a1c22'; g.fillRect(3,10,11,1); },
+  // 5 mine + light
+  g=>{ g.fillStyle='#2a2a30'; g.fillRect(3,10,11,4); g.fillRect(4,9,9,1); g.fillRect(5,14,7,1); g.fillStyle='#e23b2b'; g.fillRect(7,7,2,2); px(g,7,6,'#ff8a7a'); g.fillStyle='#3a3a42'; px(g,2,11,'#3a3a42'); px(g,13,11,'#3a3a42'); },
+  // 6 dynamite bundle
+  g=>{ g.fillStyle='#b23028'; g.fillRect(5,7,2,8); g.fillRect(8,6,2,9); g.fillRect(11,7,2,8); g.fillStyle='#d94a3a'; px(g,5,7,'#d94a3a'); px(g,8,6,'#d94a3a'); px(g,11,7,'#d94a3a'); g.fillStyle='#5a3a1a'; g.fillRect(5,10,8,1); g.fillStyle='#5a3a1a'; g.fillRect(9,3,1,3); px(g,10,2,'#ffd24a'); px(g,9,1,'#ff8a1a'); },
+];
+const spriteNames = ['1 - Round classic','2 - Metal band','3 - Grenade','4 - Sci-fi orb','5 - Disc mine','6 - Dynamite'];
+const sg = document.getElementById('sprites');
+bombs.forEach((fn,i)=>{
+  const card=document.createElement('div'); card.className='card';
+  const h=document.createElement('h3'); h.textContent=spriteNames[i];
+  const off=document.createElement('canvas'); off.width=16; off.height=16;
+  const og=off.getContext('2d'); fn(og);
+  const c=document.createElement('canvas'); c.width=144; c.height=144;
+  const g=c.getContext('2d'); g.imageSmoothingEnabled=false; g.drawImage(off,0,0,144,144);
+  // true-size preview beside a tile
+  const t=document.createElement('canvas'); t.width=72; t.height=36; t.style.marginTop='6px';
+  const tg=t.getContext('2d'); tg.imageSmoothingEnabled=false;
+  tg.fillStyle='#7a5230'; tg.fillRect(2,2,32,32); tg.strokeStyle='#5a3a1a'; tg.strokeRect(2.5,2.5,31,31);
+  tg.drawImage(off,44,11,14,14);
+  const note=document.createElement('div'); note.className='note'; note.textContent='true size vs a 32px half-tile';
+  card.appendChild(h); card.appendChild(c); card.appendChild(document.createElement('br')); card.appendChild(t); card.appendChild(note);
+  sg.appendChild(card);
+});
+
+// ---------- 6 explosion animations (64px tile, shown 2x) ----------
+function rng(seed){ let s=seed; return ()=>{ s=(s*1103515245+12345)&0x7fffffff; return s/0x7fffffff; }; }
+const explosions = [
+  // 1 fireball
+  (g,p,parts)=>{ const cx=32,cy=32,r=6+p*25; const grad=g.createRadialGradient(cx,cy,1,cx,cy,r); grad.addColorStop(0,'#fff'); grad.addColorStop(0.4,'#ffd24a'); grad.addColorStop(1,'#ff6a1a'); g.globalAlpha=Math.max(0,1-p); g.fillStyle=grad; g.beginPath(); g.arc(cx,cy,r,0,7); g.fill(); g.globalAlpha=Math.max(0,1-p*2.4); g.fillStyle='#fff'; g.beginPath(); g.arc(cx,cy,r*0.35,0,7); g.fill(); g.globalAlpha=1; },
+  // 2 shockwave ring
+  (g,p,parts)=>{ const cx=32,cy=32,r=p*30; g.globalAlpha=Math.max(0,1-p); g.strokeStyle='#ffe27a'; g.lineWidth=Math.max(1,7*(1-p)); g.beginPath(); g.arc(cx,cy,r,0,7); g.stroke(); g.globalAlpha=Math.max(0,0.5-p); g.fillStyle='#ff8a1a'; g.beginPath(); g.arc(cx,cy,r*0.8,0,7); g.fill(); g.globalAlpha=1; },
+  // 3 particle burst
+  (g,p,parts)=>{ const cx=32,cy=32; g.globalAlpha=Math.max(0,1-p); for(const q of parts){ const d=q.dm*p*30; const x=cx+Math.cos(q.an)*d, y=cy+Math.sin(q.an)*d; const s=q.sr*(1-p*0.6); g.fillStyle=q.c; g.beginPath(); g.arc(x,y,Math.max(0.5,s),0,7); g.fill(); } g.globalAlpha=1; },
+  // 4 pixel explosion (blocky)
+  (g,p,parts)=>{ const cx=32,cy=32; g.globalAlpha=Math.max(0,1-p); for(const q of parts){ const d=q.dm*p*28; const x=Math.round((cx+Math.cos(q.an)*d)/4)*4, y=Math.round((cy+Math.sin(q.an)*d)/4)*4; const s=Math.max(2,Math.round(q.sr*(1-p)*4)); g.fillStyle=q.c; g.fillRect(x-s/2,y-s/2,s,s); } g.globalAlpha=1; },
+  // 5 plasma (cyan)
+  (g,p,parts)=>{ const cx=32,cy=32,r=6+p*25; const grad=g.createRadialGradient(cx,cy,1,cx,cy,r); grad.addColorStop(0,'#fff'); grad.addColorStop(0.45,'#a6ecff'); grad.addColorStop(1,'#1f7aa6'); g.globalAlpha=Math.max(0,1-p); g.fillStyle=grad; g.beginPath(); g.arc(cx,cy,r,0,7); g.fill(); g.globalAlpha=Math.max(0,1-p); g.strokeStyle='#dffcff'; g.lineWidth=Math.max(1,4*(1-p)); g.beginPath(); g.arc(cx,cy,r*1.05,0,7); g.stroke(); g.globalAlpha=1; },
+  // 6 flash + smoke
+  (g,p,parts)=>{ const cx=32,cy=32; if(p<0.18){ g.globalAlpha=1-p/0.18; g.fillStyle='#fff'; g.fillRect(0,0,64,64); } g.globalAlpha=Math.max(0,0.85-p*0.85); for(const q of parts){ const rise=p*14; const x=cx+q.ox*(0.5+p), y=cy+q.oy*(0.5+p)-rise; const s=q.sr*(0.6+p*1.2); const shade=90+Math.floor(q.g*60); g.fillStyle='rgb('+shade+','+shade+','+(shade+6)+')'; g.beginPath(); g.arc(x,y,s,0,7); g.fill(); } g.globalAlpha=1; },
+];
+const explNames = ['1 - Fireball','2 - Shockwave ring','3 - Particle burst','4 - Pixel blast','5 - Plasma (cyan)','6 - Flash + smoke'];
+function makeParts(kind,seed){ const r=rng(seed); const a=[]; const fire=['#ffd24a','#ff8a1a','#ff6a1a','#fff']; for(let i=0;i<16;i++){ a.push({ an:r()*Math.PI*2, dm:0.5+r()*0.9, sr:2+r()*3, c:fire[(r()*fire.length)|0], ox:(r()*2-1)*10, oy:(r()*2-1)*10, g:r() }); } return a; }
+const eg = document.getElementById('explosions');
+explosions.forEach((fn,i)=>{
+  const card=document.createElement('div'); card.className='card';
+  const h=document.createElement('h3'); h.textContent=explNames[i];
+  const c=document.createElement('canvas'); c.width=64; c.height=64; c.style.width='128px'; c.style.height='128px';
+  const g=c.getContext('2d');
+  const st={ p:0, wait:0, parts:makeParts(i,i*97+7) };
+  const btn=document.createElement('button'); btn.textContent='Replay'; btn.addEventListener('click',()=>{ st.p=0; st.wait=0; st.parts=makeParts(i,(Math.random()*9999)|0); });
+  card.appendChild(h); card.appendChild(c); card.appendChild(btn); eg.appendChild(card);
+  function frame(){ g.clearRect(0,0,64,64); if(st.wait>0){ st.wait--; } else { fn(g,Math.min(1,st.p),st.parts); st.p+=0.03; if(st.p>=1.2){ st.p=0; st.wait=40; st.parts=makeParts(i,(Math.random()*9999)|0); } } requestAnimationFrame(frame); }
+  frame();
+});
+
+// ---------- 6 detonation sounds ----------
+let AC=null;
+function ctx(){ if(!AC) AC=new (window.AudioContext||window.webkitAudioContext)(); if(AC.state==='suspended') AC.resume(); return AC; }
+function noise(ac,dur){ const len=Math.max(1,Math.floor(ac.sampleRate*dur)); const b=ac.createBuffer(1,len,ac.sampleRate); const d=b.getChannelData(0); for(let i=0;i<len;i++) d[i]=Math.random()*2-1; return b; }
+const bus=()=>{ const ac=ctx(); const g=ac.createGain(); g.gain.value=0.85; g.connect(ac.destination); return g; };
+const sounds = [
+  // 1 classic boom (bigger than the arrow)
+  ()=>{ const ac=ctx(),t=ac.currentTime,o=bus(); const s=ac.createOscillator(); s.type='sine'; s.frequency.setValueAtTime(120,t); s.frequency.exponentialRampToValueAtTime(34,t+0.6); const sg=ac.createGain(); sg.gain.setValueAtTime(1,t); sg.gain.exponentialRampToValueAtTime(0.001,t+0.7); s.connect(sg).connect(o); s.start(t); s.stop(t+0.75); const n=ac.createBufferSource(); n.buffer=noise(ac,0.6); const lp=ac.createBiquadFilter(); lp.type='lowpass'; lp.frequency.setValueAtTime(2200,t); lp.frequency.exponentialRampToValueAtTime(160,t+0.5); const ng=ac.createGain(); ng.gain.setValueAtTime(0.7,t); ng.gain.exponentialRampToValueAtTime(0.001,t+0.55); n.connect(lp).connect(ng).connect(o); n.start(t); n.stop(t+0.6); },
+  // 2 deep rumble (long low tail)
+  ()=>{ const ac=ctx(),t=ac.currentTime,o=bus(); const s=ac.createOscillator(); s.type='sine'; s.frequency.setValueAtTime(70,t); s.frequency.exponentialRampToValueAtTime(28,t+0.9); const sg=ac.createGain(); sg.gain.setValueAtTime(0.9,t); sg.gain.exponentialRampToValueAtTime(0.001,t+1.0); s.connect(sg).connect(o); s.start(t); s.stop(t+1.05); const n=ac.createBufferSource(); n.buffer=noise(ac,1.0); const lp=ac.createBiquadFilter(); lp.type='lowpass'; lp.frequency.setValueAtTime(600,t); lp.frequency.exponentialRampToValueAtTime(90,t+0.9); const ng=ac.createGain(); ng.gain.setValueAtTime(0.55,t); ng.gain.exponentialRampToValueAtTime(0.001,t+1.0); n.connect(lp).connect(ng).connect(o); n.start(t); n.stop(t+1.05); },
+  // 3 sharp crack + boom
+  ()=>{ const ac=ctx(),t=ac.currentTime,o=bus(); const c=ac.createBufferSource(); c.buffer=noise(ac,0.08); const hp=ac.createBiquadFilter(); hp.type='highpass'; hp.frequency.value=1800; const cg=ac.createGain(); cg.gain.setValueAtTime(0.7,t); cg.gain.exponentialRampToValueAtTime(0.001,t+0.09); c.connect(hp).connect(cg).connect(o); c.start(t); c.stop(t+0.1); const s=ac.createOscillator(); s.type='sine'; s.frequency.setValueAtTime(110,t+0.01); s.frequency.exponentialRampToValueAtTime(32,t+0.5); const sg=ac.createGain(); sg.gain.setValueAtTime(1,t+0.01); sg.gain.exponentialRampToValueAtTime(0.001,t+0.55); s.connect(sg).connect(o); s.start(t); s.stop(t+0.6); },
+  // 4 sci-fi detonation (ring mod + sub)
+  ()=>{ const ac=ctx(),t=ac.currentTime,o=bus(); const sub=ac.createOscillator(); sub.type='sine'; sub.frequency.setValueAtTime(100,t); sub.frequency.exponentialRampToValueAtTime(36,t+0.5); const subg=ac.createGain(); subg.gain.setValueAtTime(0.9,t); subg.gain.exponentialRampToValueAtTime(0.001,t+0.6); sub.connect(subg).connect(o); sub.start(t); sub.stop(t+0.65); const car=ac.createOscillator(); car.type='sawtooth'; car.frequency.setValueAtTime(220,t); car.frequency.exponentialRampToValueAtTime(80,t+0.5); const mod=ac.createOscillator(); mod.type='sine'; mod.frequency.value=120; const ring=ac.createGain(); ring.gain.value=0; mod.connect(ring.gain); car.connect(ring); const lp=ac.createBiquadFilter(); lp.type='lowpass'; lp.frequency.setValueAtTime(2600,t); lp.frequency.exponentialRampToValueAtTime(300,t+0.5); const rg=ac.createGain(); rg.gain.setValueAtTime(0.4,t); rg.gain.exponentialRampToValueAtTime(0.001,t+0.55); ring.connect(lp).connect(rg).connect(o); car.start(t); mod.start(t); car.stop(t+0.6); mod.stop(t+0.6); },
+  // 5 debris boom (boom + scattered noise hits)
+  ()=>{ const ac=ctx(),t=ac.currentTime,o=bus(); const s=ac.createOscillator(); s.type='sine'; s.frequency.setValueAtTime(115,t); s.frequency.exponentialRampToValueAtTime(34,t+0.5); const sg=ac.createGain(); sg.gain.setValueAtTime(0.95,t); sg.gain.exponentialRampToValueAtTime(0.001,t+0.55); s.connect(sg).connect(o); s.start(t); s.stop(t+0.6); for(let i=0;i<6;i++){ const dt=0.06+Math.random()*0.4; const d=ac.createBufferSource(); d.buffer=noise(ac,0.05); const bp=ac.createBiquadFilter(); bp.type='bandpass'; bp.frequency.value=400+Math.random()*1400; bp.Q.value=2; const dg=ac.createGain(); dg.gain.setValueAtTime(0.0,t+dt); dg.gain.linearRampToValueAtTime(0.25,t+dt+0.005); dg.gain.exponentialRampToValueAtTime(0.001,t+dt+0.08); d.connect(bp).connect(dg).connect(o); d.start(t+dt); d.stop(t+dt+0.09); } },
+  // 6 concussive thud (muffled, heavily lowpassed)
+  ()=>{ const ac=ctx(),t=ac.currentTime,o=bus(); const s=ac.createOscillator(); s.type='sine'; s.frequency.setValueAtTime(95,t); s.frequency.exponentialRampToValueAtTime(40,t+0.3); const sg=ac.createGain(); sg.gain.setValueAtTime(1,t); sg.gain.exponentialRampToValueAtTime(0.001,t+0.4); s.connect(sg).connect(o); s.start(t); s.stop(t+0.45); const n=ac.createBufferSource(); n.buffer=noise(ac,0.35); const lp=ac.createBiquadFilter(); lp.type='lowpass'; lp.frequency.setValueAtTime(500,t); lp.frequency.exponentialRampToValueAtTime(120,t+0.28); const ng=ac.createGain(); ng.gain.setValueAtTime(0.6,t); ng.gain.exponentialRampToValueAtTime(0.001,t+0.33); n.connect(lp).connect(ng).connect(o); n.start(t); n.stop(t+0.36); },
+];
+const soundNames = ['1 - Classic boom','2 - Deep rumble','3 - Crack + boom','4 - Sci-fi detonation','5 - Debris boom','6 - Concussive thud'];
+const sog = document.getElementById('sounds');
+sounds.forEach((fn,i)=>{
+  const card=document.createElement('div'); card.className='card';
+  const h=document.createElement('h3'); h.textContent=soundNames[i];
+  const b=document.createElement('button'); b.textContent='Play'; b.addEventListener('click',()=>{ try{ fn(); }catch(e){ console.error(e); } });
+  card.appendChild(h); card.appendChild(b); sog.appendChild(card);
+});
+</script>
+</body>
+</html>

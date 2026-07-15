@@ -6,6 +6,8 @@
   const U = TILE / 16;                 // resolution multiplier vs the original 16px design
   const VIEW_W = TILE * 15, VIEW_H = TILE * 10;
   const SCALE = Math.max(1, Math.round(1920 / VIEW_W));   // 2x internal resolution for crisp sprites
+  const SIM_HZ = 144;   // fixed simulation rate
+  const SEC = s => Math.round(s * SIM_HZ);   // seconds -> ticks, so every delay below reads in real seconds
 
   const canvas = document.getElementById('game');
   canvas.width = VIEW_W * SCALE;
@@ -58,41 +60,66 @@
     for (let i = 0; i < 4; i++)
       for (let x = Math.max(0, cx - (tiers[i]>>1)); x <= Math.min(LW-1, cx + (tiers[i]>>1)); x++)
         map[top+i][x] = (x === cx) ? 3 : 4;   // only the center column collides
+    // invisible wall (5) from the canopy top up to the sky ceiling, so a tree can
+    // never be jumped over. 5 blocks the player but lets arrows through and is not
+    // counted as a room on the minimap. Only fill empty space, never real structure.
+    for (let r = 0; r < top; r++) if (map[r][cx] === 0) map[r][cx] = 5;
     TREE_CROWNS.push({ cx, top });
   }
   plantTree(0, SURF, 4);       // both map edges get a tree instead of an invisible wall
   plantTree(LW-1, SURF-1, 3);
-  const solid = (tx,ty) => tx<0||ty<0||tx>=LW||ty>=LH ? (ty>=LH) : (map[ty][tx] > 0 && map[ty][tx] < 4);
+  // collision, movement, and pathfinding live in logic.js so they can be unit
+  // tested headlessly; the names below read exactly as before
+  const phys = LOGIC.createPhysics({ TILE, EPS: 0.01, LW, LH, map });
+  const { solid, standable, moveAxis, moveSwept, grounded, overlaps, bboxSolid } = phys;
+  const bfsRoute = (start, goal, allowJumps) => phys.bfsRoute(start, goal, allowJumps);
 
   // ---------- player ----------
   const P = {
     x: 2*TILE, y: SURF*TILE - Math.round(1.125*TILE), w: Math.round(0.5*TILE), h: Math.round(1.125*TILE),
     vx: 0, vy: 0, onGround:false, face:1,
     anim:'IDLE', frame:0, ftime:0, attackT:0, pendingShot:false, coyote:0, jumpBuf:0,
-    canDouble:false, usedDouble:false, canCharge:false, charging:false, chargeT:0,
-    aim:0, legs:'IDLE', lframe:0, ltime:0, hurtT:0, lastStep:-1
+    canDouble:false, usedDouble:false, canCharge:false, canBomb:false, charging:false, chargeT:0,
+    aim:0, legs:'IDLE', lframe:0, ltime:0, hurtT:0, lastStep:-1,
+    canBoost:false, boost:false, boostDir:1, boostIdle:0, runDir:0, runStartTile:0, boostAir:false, trail:[]
   };
-  const P_HURT = 14;   // ticks of the player flinch
-  const WALK_SPD=0.85*U, RUN_SPD=2.0*U, ACCEL=0.5*U, FRIC=0.5*U;
+  const P_HURT = SEC(0.1);         // player flinch
+  const P_COYOTE = SEC(0.04);      // still jump briefly after leaving a ledge
+  const P_JUMP_BUF = SEC(0.055);   // remember a jump pressed just before landing
+  const P_DMG_CD = SEC(0.4);       // i-frames after the player takes a hit
+  const WALK_SPD=1.02*U, ACCEL=0.5*U, FRIC=0.5*U;   // walk is 20% faster than before, no sprint
+  const BOOST_SPD=2.6*U, BOOST_TILES=6, BOOST_IDLE=SEC(0.5);   // run 6 tiles to charge; release A/D 0.5s to stop
   // analog jump: hold Space for up to exactly 3 tiles, JUMP_V solves the
   // discrete per-frame integration so the height is exact in-game
   const GRAV = 0.1375*U;
   const JUMP_H_MAX = 3*TILE;
-  const JUMP_V = Math.sqrt(GRAV*GRAV/4 + 2*GRAV*JUMP_H_MAX) + GRAV/2;
+  const JUMP_V = LOGIC.solveJumpV(GRAV, JUMP_H_MAX);
   const JUMP_CUT = 0.55;   // ascent kept per frame once Space is released
   const GRAV_FALL = 0.5625*GRAV;          // gentler gravity on the way down
   const FALL_MAX = 1.6*U;                 // low terminal velocity, keeps the archer easy to track
   const ARROW_SPD=1.6*U;                  // base bow speed, the player's velocity is added on top
+  const ARROW_LEN = 0.95*TILE, ARROW_THICK = ARROW_LEN * (12/88);
   // draw is quick, the return to rest plays slower with an ease-out
   const DRAW_TICKS=11, RECOVER_TICKS=20, ATTACK_DUR=DRAW_TICKS+RECOVER_TICKS;
   const RELEASE_FRAME=5;                  // baked nocked arrow shows on frame 4, projectile takes over on 5
   // charge shot: hold past the first arrow to charge a second, damage 1..10,
   // electric blue bleaching to a white-hot core at full charge
-  const CHARGE_MAX = 180;
+  const CHARGE_MAX = SEC(2);   // wind-up start to full power (the charge hum tracks this)
+  const CHARGE_MIN = 1/3;   // releasing below a third of full charge cancels the power shot, no arrow
+  const CHARGE_DELAY = SEC(0.5);   // hold left click this long before a power shot winds up
   const CHG_TINT = [63,142,252], CHG_CORE = [232,246,255], CHG_TINT_MAX = 0.9;
   const CHG_GLOW = 'rgba(80,160,255,', CHG_GLOW_MAX = 8;
+  // bombs (Q to drop): up to 3 live at once, 1s fuse, tile-sized cyan blast over 1s
+  const BOMB_SIZE = Math.round(TILE/3);
+  const BOMB_FUSE = SEC(3), BOMB_BOOM = SEC(1);
+  const BOMB_RADIUS = 0.5*TILE, BOMB_DMG = 10, BOMB_MAX = 3;
+  const bombs = [];
 
   // ---------- sound effects ----------
+  // master + per-channel mix. SFX_GAIN halves every effect globally, on top of
+  // whatever the SFX slider is set to. The mute buttons and sliders wire to SND below.
+  const SFX_GAIN = 0.5;
+  const SND = { music: { vol: 0.5, muted: false }, sfx: { vol: 0.5, muted: false } };
   // baked WAVs decode once, the charge hum is synthesized live so it can hold while the button is held
   let AC = null, chargeSnd = null;
   const sfxBuf = {};
@@ -106,7 +133,9 @@
       const bin = atob(url.split(',')[1]);
       const bytes = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-      AC.decodeAudioData(bytes.buffer).then(b => { sfxBuf[k] = b; });
+      AC.decodeAudioData(bytes.buffer)
+        .then(b => { sfxBuf[k] = b; })
+        .catch(err => console.error('sfx failed to decode: ' + k, err));
     }
   }
   function playSfx(name, vol, rate){
@@ -115,7 +144,7 @@
     if (AC.state === 'suspended') AC.resume();
     const src = AC.createBufferSource(); src.buffer = b;
     src.playbackRate.value = rate || 1;
-    const g = AC.createGain(); g.gain.value = (vol == null ? 1 : vol)*SND.sfx.vol;
+    const g = AC.createGain(); g.gain.value = (vol == null ? 1 : vol)*SND.sfx.vol*SFX_GAIN;
     src.connect(g); g.connect(AC.destination); src.start();
   }
   function chargeSndStart(){
@@ -132,7 +161,7 @@
   }
   function chargeSndUpdate(c){
     if (!chargeSnd) return;
-    const v = SND.sfx.muted ? 0 : (0.2 + 0.8*c)*0.1*SND.sfx.vol;
+    const v = SND.sfx.muted ? 0 : (0.2 + 0.8*c)*0.1*SND.sfx.vol*SFX_GAIN;
     chargeSnd.osc.frequency.value = 55*Math.pow(2, 1.6*c);
     chargeSnd.lfo.frequency.value = 3 + 12*c;
     chargeSnd.g.gain.value = v;
@@ -142,24 +171,104 @@
     if (!chargeSnd) return;
     chargeSnd.osc.stop(); chargeSnd.lfo.stop(); chargeSnd = null;
   }
+  // power-shot impact: a deep futuristic boom, synthesized live like the charge hum.
+  // level is matched to the terrain impacts through the same SND.sfx.vol * SFX_GAIN mix.
+  let boomNoise = null;
+  function playBoom(){
+    if (!AC || SND.sfx.muted) return;
+    if (AC.state === 'suspended') AC.resume();
+    const t = AC.currentTime;
+    if (!boomNoise){
+      const len = Math.floor(AC.sampleRate * 0.5);
+      boomNoise = AC.createBuffer(1, len, AC.sampleRate);
+      const d = boomNoise.getChannelData(0);
+      for (let i = 0; i < len; i++) d[i] = Math.random()*2 - 1;
+    }
+    const out = AC.createGain();
+    out.gain.value = 0.7 * SND.sfx.vol * SFX_GAIN;   // in line with the wood/dirt impacts
+    out.connect(AC.destination);
+    const o = AC.createOscillator(); o.type = 'sine';
+    o.frequency.setValueAtTime(90, t); o.frequency.exponentialRampToValueAtTime(32, t + 0.5);
+    const og = AC.createGain(); og.gain.setValueAtTime(1.0, t); og.gain.exponentialRampToValueAtTime(0.001, t + 0.6);
+    o.connect(og).connect(out); o.start(t); o.stop(t + 0.65);
+    const n = AC.createBufferSource(); n.buffer = boomNoise;
+    const lp = AC.createBiquadFilter(); lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(1800, t); lp.frequency.exponentialRampToValueAtTime(180, t + 0.4);
+    const ng = AC.createGain(); ng.gain.setValueAtTime(0.55, t); ng.gain.exponentialRampToValueAtTime(0.001, t + 0.45);
+    n.connect(lp).connect(ng).connect(out); n.start(t); n.stop(t + 0.5);
+  }
+  // bomb detonation: the sci-fi orb sound, stretched to ~1 second
+  function playBombSound(){
+    if (!AC || SND.sfx.muted) return;
+    if (AC.state === 'suspended') AC.resume();
+    const t = AC.currentTime;
+    const out = AC.createGain(); out.gain.value = 0.8 * SND.sfx.vol * SFX_GAIN; out.connect(AC.destination);
+    const sub = AC.createOscillator(); sub.type = 'sine';
+    sub.frequency.setValueAtTime(100, t); sub.frequency.exponentialRampToValueAtTime(36, t + 1.0);
+    const sg = AC.createGain(); sg.gain.setValueAtTime(0.9, t); sg.gain.exponentialRampToValueAtTime(0.001, t + 1.05);
+    sub.connect(sg).connect(out); sub.start(t); sub.stop(t + 1.1);
+    const car = AC.createOscillator(); car.type = 'sawtooth';
+    car.frequency.setValueAtTime(220, t); car.frequency.exponentialRampToValueAtTime(80, t + 1.0);
+    const mod = AC.createOscillator(); mod.type = 'sine'; mod.frequency.value = 120;
+    const ring = AC.createGain(); ring.gain.value = 0; mod.connect(ring.gain); car.connect(ring);
+    const lp = AC.createBiquadFilter(); lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(2600, t); lp.frequency.exponentialRampToValueAtTime(300, t + 1.0);
+    const rg = AC.createGain(); rg.gain.setValueAtTime(0.4, t); rg.gain.exponentialRampToValueAtTime(0.001, t + 1.05);
+    ring.connect(lp).connect(rg).connect(out); car.start(t); mod.start(t); car.stop(t + 1.1); mod.stop(t + 1.1);
+  }
+  // speed-booster loop: a darker/lower warp shimmer, held while boosting
+  let boostSnd = null;
+  function boostSndStart(){
+    if (!AC || boostSnd) return;
+    if (AC.state === 'suspended') AC.resume();
+    const t = AC.currentTime;
+    const vol = AC.createGain(); vol.gain.setValueAtTime(0.0001, t); vol.connect(AC.destination);
+    const lp = AC.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1400;
+    const g = AC.createGain(); g.gain.value = 0.35; lp.connect(g).connect(vol);   // tremolo rides on g
+    const oscs = [];
+    [147,147,220,294].forEach((f,i) => {
+      const s = AC.createOscillator(); s.type = 'sine'; s.frequency.value = f;
+      s.detune.value = (i%2 ? 1 : -1) * 14 * (1 + i*0.35);
+      const sg = AC.createGain(); sg.gain.value = 0.25;
+      s.connect(sg).connect(lp); s.start(t); oscs.push(s);
+    });
+    const trem = AC.createOscillator(); trem.type = 'sine'; trem.frequency.value = 5;
+    const td = AC.createGain(); td.gain.value = 0.13; trem.connect(td).connect(g.gain); trem.start(t);
+    boostSnd = { vol, oscs, trem };
+  }
+  function boostSndUpdate(){
+    if (!boostSnd) return;
+    const lvl = SND.sfx.muted ? 0 : 1.2 * SND.sfx.vol * SFX_GAIN;
+    boostSnd.vol.gain.setTargetAtTime(lvl, AC.currentTime, 0.03);   // smooth fade in / mute
+  }
+  function boostSndStop(){
+    if (!boostSnd) return;
+    for (const s of boostSnd.oscs) s.stop();
+    boostSnd.trem.stop();
+    boostSnd = null;
+  }
 
   // ---------- input ----------
   const keys = {};
   addEventListener('keydown', e => {
     initAudio();
     keys[e.code] = true;
+    if (menu){ startMenuMusic(); if (e.code === 'Enter'){ menu = false; stopMenuMusic(); } return; }
     if (e.code === 'Escape' && !notice){ paused = !paused; if (!paused) P.jumpBuf = 0; }
     if (e.code === 'F3') debugAI = !debugAI;
-    if (e.code === 'Space'){ if (!e.repeat && !paused && !notice) P.jumpBuf = 8; e.preventDefault(); }
+    if ((e.code === 'ShiftLeft' || e.code === 'ShiftRight') && !e.repeat && !paused && !notice) tryDropBomb();
+    if (e.code === 'KeyS' && P.boost) P.boost = false;   // press S to stop the speed booster immediately
+    if (e.code === 'Space'){ if (!e.repeat && !paused && !notice) P.jumpBuf = P_JUMP_BUF; e.preventDefault(); }
   });
   addEventListener('keyup',   e => { keys[e.code] = false; });
   // clear input on focus loss, and cancel a held charge instead of firing it blind
   addEventListener('blur', () => {
     for (const k in keys) keys[k] = false;
     mouse.down = false;
+    P.boost = false; boostSndStop();
     if (P.charging){ P.charging = false; P.attackT = RECOVER_TICKS; chargeSndStop(); }
   });
-  const mouse = { sx: VIEW_W/2, sy: VIEW_H/2, down:false };
+  const mouse = { sx: VIEW_W/2, sy: VIEW_H/2, down:false, downT:0 };
   function toWorldMouse(e){
     const r = canvas.getBoundingClientRect();
     mouse.sx = (e.clientX - r.left) / r.width * VIEW_W;
@@ -171,12 +280,19 @@
     initAudio();
     if (e.button !== 0) return;
     toWorldMouse(e);
-    if (notice){
-      const b = noticeBtn;
-      if (b && mouse.sx >= b.x && mouse.sx <= b.x + b.w && mouse.sy >= b.y && mouse.sy <= b.y + b.h) dismissNotice();
+    if (menu){
+      startMenuMusic();
+      if (inRect(mouse, playBtn)){ menu = false; stopMenuMusic(); }
       return;
     }
-    if (paused) return;
+    if (notice){
+      if (inRect(mouse, noticeBtn)) dismissNotice();
+      return;
+    }
+    if (paused){
+      if (inRect(mouse, quitBtn)) location.reload();
+      return;
+    }
     mouse.down = true; faceToMouse(); tryShoot();
   });
   addEventListener('mouseup', e => { if (e.button===0) mouse.down=false; });
@@ -195,7 +311,7 @@
   }
   // arrows that hit terrain stick in it with impact cracks, then fade out
   const stuck = [];
-  const STICK_LIFE = 480, STICK_FADE = 60;
+  const STICK_LIFE = SEC(5), STICK_FADE = SEC(0.4), STICK_MAX = 8;   // lifetime, fade, and max solid arrows
   function stickArrow(a){
     // walk back to the surface, then embed the tip
     let bx = a.x, by = a.y, guard = 0;
@@ -220,8 +336,23 @@
       cracks.push(pts);
     }
     stuck.push({ x: cx, y: cy, bx, by, ang: a.ang, charge: a.charge, t: 0, cracks, embed });
+    // keep at most STICK_MAX solid arrows: retire the oldest by jumping its timer
+    // to the start of the existing fade once a 9th (or more) lands.
+    const fadeStart = STICK_LIFE - STICK_FADE;
+    let solidN = 0;
+    for (const s of stuck) if (s.t < fadeStart) solidN++;
+    for (let i = 0; solidN > STICK_MAX && i < stuck.length; i++)
+      if (stuck[i].t < fadeStart){ stuck[i].t = fadeStart; solidN--; }
+  }
+  function tryDropBomb(){
+    if (!P.canBomb || P.boost) return;   // no bombs while boosting
+    let live = 0; for (const b of bombs) if (!b.exploding) live++;
+    if (live >= BOMB_MAX) return;
+    bombs.push({ x: P.x + P.w/2 - BOMB_SIZE/2, y: P.y + P.h - BOMB_SIZE, w: BOMB_SIZE, h: BOMB_SIZE,
+                 vy: 0, fuseT: BOMB_FUSE, exploding: false, boomT: 0 });
   }
   function tryShoot(){
+    if (P.boost) return;   // no shooting while boosting
     // recovery is interruptible, so rapid clicks keep the full fire rate
     if (P.attackT > 0 && (P.pendingShot || P.frame < RELEASE_FRAME)) return;
     P.attackT = ATTACK_DUR; P.pendingShot = true;
@@ -253,7 +384,7 @@
     }
   }
   function updateChargeFx(){
-    if (P.charging){
+    if (P.charging && mouse.downT >= CHARGE_DELAY){
       const cg = P.chargeT / CHARGE_MAX;
       if (Math.random() < 0.2 + 0.6*cg)
         chargeFx.push({ an: Math.random()*Math.PI*2, r: 42 + Math.random()*28,
@@ -292,9 +423,25 @@
     { x: 19*TILE, y: 10*TILE, w: TILE, h: TILE, taken: false, kind: 'charge',
       fill: '#e8f6ff', edge: '#3f8efc', glow: 'rgba(80,160,255,0.9)',
       title: 'Power Shot', verb: 'Hold', key: 'L-Click', tail: 'to charge, release to fire' },
+    { x: 25*TILE, y: 10*TILE, w: TILE, h: TILE, taken: false, kind: 'bomb',
+      fill: '#1f7aa6', edge: '#a6ecff', glow: 'rgba(120,230,255,0.9)',
+      title: 'Bombs', verb: 'Press', key: 'Shift', tail: 'to drop, up to 3' },
+    { x: 25*TILE, y: 28*TILE, w: TILE, h: TILE, taken: false, kind: 'boost',
+      fill: '#c04b7a', edge: '#ffe27a', glow: 'rgba(255,120,200,0.9)',
+      title: 'Speed Booster', verb: 'Run', key: '6 tiles', tail: 'straight to charge' },
   ];
   // pickup notification modal, pauses the game until Continue is clicked
   let notice = null, noticeBtn = null, paused = false;
+  let menu = true, playBtn = null, quitBtn = null, menuMusic = null;
+  const inRect = (m, b) => !!b && m.sx >= b.x && m.sx <= b.x + b.w && m.sy >= b.y && m.sy <= b.y + b.h;
+  function startMenuMusic(){
+    if (!menu) return;
+    if (!menuMusic){ menuMusic = new Audio('menu.mp3'); menuMusic.loop = true; }
+    menuMusic.volume = SND.music.muted ? 0 : SND.music.vol;
+    menuMusic.play().catch(() => {});
+  }
+  function stopMenuMusic(){ if (menuMusic){ menuMusic.pause(); menuMusic.currentTime = 0; } }
+  function updateMusicVol(){ if (menuMusic) menuMusic.volume = SND.music.muted ? 0 : SND.music.vol; }
   function notify(pk){ notice = { title: 'You gained ' + pk.title, verb: pk.verb, key: pk.key, tail: pk.tail }; }
   function dismissNotice(){
     notice = null; noticeBtn = null;
@@ -306,11 +453,14 @@
   const KN = ASSETS.KNIGHT;
   const KROW = { IDLE:0, WALK:1, RUN:2, JUMP:3, ATTACK:4, DIE:5, HURT:6 };
   const KN_WALK = 0.45*U, KN_RUN = 0.9*U;
-  const KN_ATTACK_DUR = 90, KN_ATK_CD = 50, KN_HURT = 16;
+  const KN_ATTACK_DUR = SEC(0.5), KN_ATK_CD = SEC(0.35), KN_HURT = SEC(0.11);
+  const KN_JMP_CD = SEC(0.25);                            // breather after a landing
+  const AI_REPATH = SEC(0.2), AI_REPATH_SLOW = SEC(0.6);  // how often the knight replans / paces
+  const KN_GIVEUP = SEC(2);   // stand watching an unreachable player this long, then return home
   const KN_REACH = Math.round(1.2*TILE);   // matches the spear thrust
   const KN_CX = 108;                        // body center in sheet px, so a 180 pivots in place
   // lunge: stance for 3s with the spear leveled, then a 6-tile dash for 40 damage
-  const KN_LUNGE_WIND = 180, KN_LUNGE_CD = 600, KN_LUNGE_DIST = 6*TILE;
+  const KN_LUNGE_WIND = SEC(2), KN_LUNGE_CD = SEC(5), KN_LUNGE_DIST = 6*TILE;
   const KN_LUNGE_SPD = 10, KN_LUNGE_DMG = 40, KN_STANCE = 5, KN_TINT_SPLIT = 190;
   const knights = [
     { x: 54*TILE, y: (SURF-1)*TILE - Math.round(1.125*TILE),
@@ -322,15 +472,11 @@
       route: null, pathT: 0, lastPN: -1, settleX: null, goalHome: false, patDir: 1, patT: 0,
       jmpCd: 0, wasGround: true, jumpFrom: null, jumpFails: 0, resetting: false,
       lungeCd: 0, lungeT: 0, lungeDash: 0, lungeHit: false, dashPrevX: null,
-      stranded: false, dead: false, dieT: 0 }
+      stranded: false, gaveUp: false, dead: false, dieT: 0, holdT: 0 }
   ];
   let pDmgCd = 0;   // player damage cooldown so hits land once, not every frame
   let pLastNode = -1;   // the player's last grounded node, stable while they hop
   let debugAI = false;
-  function standable(tx, ty){
-    return tx >= 0 && tx < LW && ty >= 1 && ty < LH &&
-           solid(tx, ty) && !solid(tx, ty-1) && !solid(tx, ty-2);
-  }
   function groundNode(E){
     const feet = Math.max(1, Math.floor((E.y + E.h)/TILE));
     const cx2 = Math.max(0, Math.min(LW-1, Math.floor((E.x + E.w/2)/TILE)));
@@ -341,69 +487,6 @@
     for (let ty = feet; ty < LH; ty++)
       if (standable(cx2, ty)) return ty*LW + cx2;
     return -1;
-  }
-  // BFS over standable cells with the knight's legal moves: walk, fall off edges,
-  // and jumps up to 3 tiles high across gaps up to 2 tiles. Returns whether the
-  // player is reachable at all and the first jump along the way, if any.
-  function bfsRoute(start, goal, allowJumps){
-    const prev = new Int32Array(LW*LH).fill(-1);
-    const q = [start]; prev[start] = start;
-    for (let qi = 0; qi < q.length && prev[goal] < 0; qi++){
-      const n = q[qi], tx = n % LW, ty = (n - tx) / LW;
-      const push = m => { if (prev[m] < 0){ prev[m] = n; q.push(m); } };
-      for (const dx of [-1, 1]){
-        const nx = tx + dx;
-        if (nx < 0 || nx >= LW) continue;
-        if (standable(nx, ty)) push(ty*LW + nx);
-        else if (!solid(nx, ty-1) && !solid(nx, ty-2)){
-          for (let fy = ty; fy < LH; fy++) if (standable(nx, fy)){ push(fy*LW + nx); break; }
-        }
-      }
-      if (!allowJumps) continue;
-      for (let up = 1; up <= 3; up++){
-        const ny = ty - up;
-        if (ny < 1) break;
-        let clear = true;
-        for (let r2 = ny-2; r2 <= ty-1 && clear; r2++) if (solid(tx, r2)) clear = false;
-        if (!clear) break;
-        for (const dx of [-3, -2, -1, 1, 2, 3]){
-          if (up === 3 && Math.abs(dx) === 3) continue;   // arc can't cover 3 up AND 3 across
-          const nx = tx + dx;
-          if (!standable(nx, ny)) continue;
-          const wide = Math.abs(dx) >= 2;   // wide jumps arc higher, need more headroom
-          if (wide && solid(tx, ny-3)) continue;
-          let ok3 = true;
-          const sg = Math.sign(dx);
-          for (let cx = tx + sg; cx !== nx && ok3; cx += sg){
-            if (standable(cx, ny)) ok3 = false;               // a nearer edge exists, land there
-            if (solid(cx, ny-1) || solid(cx, ny-2)) ok3 = false;
-            if (wide && solid(cx, ny-3)) ok3 = false;
-          }
-          if (ok3) push(ny*LW + nx);
-        }
-      }
-      // flat and descending hops across small gaps (a 1-col gap flat, up to 2 cols
-      // wide when dropping a tile or two)
-      for (const dx of [-3, -2, 2, 3]){
-        const nx = tx + dx;
-        if (nx < 0 || nx >= LW) continue;
-        for (let dy = 0; dy <= 2; dy++){
-          if (dy === 0 && Math.abs(dx) === 3) continue;   // flat arc can't cover 3 across
-          const ny2 = ty + dy;
-          if (!standable(nx, ny2)) continue;
-          let gap = true;
-          const sg = Math.sign(dx);
-          for (let cx = tx + sg; cx !== nx && gap; cx += sg){
-            for (let ry = ty; ry <= ny2 && gap; ry++) if (standable(cx, ry)) gap = false;
-            if (solid(cx, ty-1) || solid(cx, ty-2)) gap = false;
-            if (Math.abs(dx) === 3 && solid(cx, ty-3)) gap = false;
-          }
-          if (gap) push(ny2*LW + nx);
-          break;
-        }
-      }
-    }
-    return prev[goal] < 0 ? null : prev;
   }
   function routeTo(k, target){
     const start = groundNode(k);
@@ -460,14 +543,14 @@
   // patrol walk: turn at walls, edges, patrol bounds, and sometimes at random
   function pace(k, anchorX, ranged){
     if (--k.patT <= 0){
-      k.patT = 90 + Math.random()*90;
+      k.patT = AI_REPATH_SLOW + Math.random()*AI_REPATH_SLOW;
       if (Math.random() < 0.45) k.patDir *= -1;
     }
     const cx2 = k.x + k.w/2;
     if (ranged && (cx2 - anchorX) * k.patDir > 2.5*TILE) k.patDir *= -1;
     const ahead = Math.floor((cx2 + k.patDir*(k.w/2 + 10))/TILE);
     const fr2 = Math.floor((k.y + k.h)/TILE);
-    if (solid(ahead, fr2-1) || solid(ahead, fr2-2) || !solid(ahead, fr2)){ k.patDir *= -1; k.patT = 90; }
+    if (solid(ahead, fr2-1) || solid(ahead, fr2-2) || !solid(ahead, fr2)){ k.patDir *= -1; k.patT = AI_REPATH_SLOW; }
     k.vx = k.patDir * KN_WALK * 0.8;
     k.face = k.patDir;
   }
@@ -487,25 +570,20 @@
         if (k.dieT > 140) knights.splice(i, 1);
         continue;
       }
-      // aggro on sight (same band and screen column), dropped when the player
-      // leaves the band. After a give-up only the spawn screen re-arms him.
+      // aggro on sight, same band and screen column, dropped when the player
+      // leaves the band. While returning home he still re-arms on sight from his
+      // current spot, so following him pulls him back in instead of being ignored.
       const sameBand = bandOf(P.y + P.h/2) === bandOf(k.y + k.h/2);
-      if (k.resetting && !k.stranded){
-        if (bandOf(P.y + P.h/2) === bandOf(k.hy + k.h/2) &&
-            Math.floor((P.x + P.w/2)/VIEW_W) === Math.floor((k.hx + k.w/2)/VIEW_W)){
-          k.resetting = false; k.aggro = true;
-        }
-      } else if (k.resetting){
-        // stranded with no way home: fight anyone who shows up
-        if (sameBand && Math.floor((P.x + P.w/2)/VIEW_W) === Math.floor((k.x + k.w/2)/VIEW_W)){
-          k.resetting = false; k.aggro = true;
-        }
-      } else {
-        if (sameBand && Math.floor((P.x + P.w/2)/VIEW_W) === Math.floor((k.x + k.w/2)/VIEW_W)) k.aggro = true;
-        if (!sameBand) k.aggro = false;
-      }
+      const sameScreen = sameBand && Math.floor((P.x + P.w/2)/VIEW_W) === Math.floor((k.x + k.w/2)/VIEW_W);
+      // aggro on sight, but once he has given up on an unreachable player he only
+      // re-engages when there is an actual path to reach them.
+      if (sameScreen && (k.aggro || !k.gaveUp || routeTo(k, P).ok)) k.aggro = true;
+      else if (!sameBand) k.aggro = false;
       if (k.atkCd > 0) k.atkCd--;
       if (k.lungeCd > 0 && k.lungeT <= 0 && k.lungeDash <= 0) k.lungeCd--;
+      // time spent aggro with no way to reach the player; drives the give-up-and-go-home
+      if (!k.aggro || k.attackT > 0 || k.lungeT > 0 || k.lungeDash > 0 || (k.route && !k.goalHome)) k.holdT = 0;
+      else k.holdT = Math.min(k.holdT + 1, KN_GIVEUP);
       const dxp = (P.x + P.w/2) - (k.x + k.w/2);
       let want = 'IDLE';
       if (k.lungeT > 0){
@@ -531,8 +609,8 @@
         k.dashPrevX = k.x;
         if (!k.lungeHit && k.lungeDash > 0){
           const front = { x: k.face > 0 ? k.x : k.x - KN_REACH, y: k.y, w: k.w + KN_REACH, h: k.h };
-          if (overlaps(front, P)){
-            damage(KN_LUNGE_DMG); k.lungeHit = true; pDmgCd = 60;
+          if (!P.boost && overlaps(front, P)){
+            damage(KN_LUNGE_DMG); k.lungeHit = true; pDmgCd = P_DMG_CD;
             P.vx = k.face * 5*U; P.vy = Math.min(P.vy, -2.2*U);
           }
         }
@@ -548,12 +626,22 @@
         // the swing connects on its middle frames
         if (!k.didHit && k.frame >= 4 && k.frame <= 7){
           const swing = { x: k.face > 0 ? k.x + k.w : k.x - KN_REACH, y: k.y, w: KN_REACH, h: k.h };
-          if (overlaps(swing, P)){ damage(20); k.didHit = true; pDmgCd = 60; }
+          if (!P.boost && overlaps(swing, P)){ damage(20); k.didHit = true; pDmgCd = P_DMG_CD; }
         }
       } else {
         const dist = Math.abs(dxp);
         const level = Math.abs((P.y + P.h) - (k.y + k.h)) < 1.5*TILE;
-        if (k.aggro && k.onGround && k.lungeCd <= 0 && level && dist <= 6*TILE){
+        // the lunge commits off ledges, so only fire it when solid ground runs the
+        // whole way to the player. Otherwise he'd dash into a pit he can't cross.
+        let lungeClear = k.onGround && level && dist <= 6*TILE;
+        if (lungeClear){
+          const lf = Math.floor((k.y + k.h + 1)/TILE);
+          const lc = Math.floor((k.x + k.w/2)/TILE);
+          const pc = Math.floor((P.x + P.w/2)/TILE);   // check ground up to the player's tile, not past it
+          const step = pc >= lc ? 1 : -1;
+          for (let c = lc + step; c !== pc + step; c += step) if (!solid(c, lf)){ lungeClear = false; break; }
+        }
+        if (k.aggro && k.lungeCd <= 0 && lungeClear){
           k.lungeT = KN_LUNGE_WIND;
           k.lungeCd = KN_LUNGE_CD;
           k.face = dxp < 0 ? -1 : 1;
@@ -574,28 +662,39 @@
           // otherwise pace in place. Routes are pinned until the timer runs out or
           // the player's node changes, and skipped mid-jump so a replan can't spin him.
           const pn = P.onGround ? groundNode(P) : pLastNode;
-          if (--k.pathT <= 0 || (k.aggro && !k.goalHome && k.lastPN !== pn)){
-            k.pathT = 30;
+          if (--k.pathT <= 0 || (k.aggro && k.lastPN !== pn)){
+            k.pathT = AI_REPATH;
             k.lastPN = pn;
-            k.route = null; k.goalHome = false;
+            k.route = null; k.goalHome = false; k.stranded = false;
             if (k.aggro){
               const rp = routeTo(k, P);
-              if (rp.ok) k.route = rp;
-              else { k.aggro = false; k.resetting = true; }   // give up and reset
+              if (rp.ok){ k.route = rp; k.gaveUp = false; }              // reachable: chase
+              else if (k.holdT >= KN_GIVEUP){ k.aggro = false; k.gaveUp = true; }  // watched 2s, give up
+              // else: still watching, route stays null and holdT keeps climbing
             }
-            if (!k.route){
-              k.goalHome = true;
+            // not aggro (just gave up, or player left the band): head home if a path
+            // home exists, otherwise wander as stranded
+            if (!k.aggro && !k.route){
               const rh = routeTo(k, { x: k.hx, y: k.hy, w: k.w, h: k.h });
-              if (rh.ok) k.route = rh;
+              if (rh.ok){ k.goalHome = true; k.route = rh; }
+              else k.stranded = true;
             }
-            k.stranded = k.goalHome && !k.route;
           }
           const r = k.route;
           const gx2 = k.goalHome ? k.hx + k.w/2 : P.x + P.w/2;
           const gdx = gx2 - (k.x + k.w/2);
           if (!r){
-            pace(k, k.x + k.w/2, false);
-            want = 'WALK';
+            if (k.aggro && !k.goalHome && !k.stranded){
+              // still watching: close toward the player, the edge guard holds him
+              // at the gap instead of diving in. holdT runs the 2s clock here.
+              k.vx = Math.abs(gdx) < 6 ? 0 : Math.sign(gdx) * KN_WALK;
+              want = k.vx === 0 ? 'IDLE' : 'WALK';
+              k.face = dxp < 0 ? -1 : 1;
+            } else {
+              // can't reach the player and can't get home either: wander aimlessly
+              pace(k, k.x + k.w/2, false);
+              want = 'WALK';
+            }
           } else if (r.drop){
             const dc = r.drop.tx*TILE + TILE/2;
             const ddx = dc - (k.x + k.w/2);
@@ -611,7 +710,7 @@
               const up2 = Math.max(0, r.jump.ly - r.jump.ty);
               const across = Math.abs(r.jump.lx - r.jump.tx);
               const H2 = (up2 + 0.9 + (across >= 3 ? 0.8 : across === 2 ? 0.3 : 0)) * TILE;
-              k.vy = -(Math.sqrt(GRAV*GRAV/4 + 2*GRAV*H2) + GRAV/2);
+              k.vy = -LOGIC.solveJumpV(GRAV, H2);
               k.jumpTx = r.jump.tx*TILE + TILE/2;
               k.jumpTy = r.jump.ty*TILE;
               k.jumpGap = Math.abs(r.jump.lx - r.jump.tx) > 1;
@@ -630,6 +729,15 @@
             const spd = (k.goalHome && !k.aggro) ? KN_WALK : gait(k, Math.abs(gdx));
             k.vx = Math.sign(gdx) * spd;
             want = spd === KN_RUN ? 'RUN' : 'WALK';
+          }
+          // chasing on foot, hold at a ledge unless the route says to drop or jump
+          // here (meaning it actually reaches the player). A lunge is a separate
+          // branch, so a charge still commits off the edge.
+          if (k.onGround && k.vx !== 0 && !(r && (r.drop || r.jump))){
+            const dir = k.vx < 0 ? -1 : 1;
+            const ahead = Math.floor((k.x + k.w/2 + dir*(k.w/2 + 4)) / TILE);
+            const foot = Math.floor((k.y + k.h + 1) / TILE);
+            if (!solid(ahead, foot)){ k.vx = 0; want = 'IDLE'; }
           }
           if (k.vx !== 0) k.face = k.vx < 0 ? -1 : 1;
         }
@@ -657,12 +765,12 @@
         }
       }
       if (k.onGround && !k.wasGround){
-        k.jmpCd = 30;   // half-second breather after landing
+        k.jmpCd = KN_JMP_CD;   // breather after landing
         k.route = null; k.pathT = 0;   // landings invalidate the old plan
         // two failed jumps in a row (no height gained): back off, pace, repath
         if (k.jumpFrom != null){
           if (Math.floor((k.y + k.h)/TILE) >= k.jumpFrom){
-            if (++k.jumpFails >= 2){ k.jumpFails = 0; k.route = null; k.pathT = 90; }
+            if (++k.jumpFails >= 2){ k.jumpFails = 0; k.route = null; k.pathT = AI_REPATH_SLOW; }
           } else k.jumpFails = 0;
           k.jumpFrom = null;
         }
@@ -672,8 +780,10 @@
       if (!k.onGround && k.attackT <= 0 && k.hurtT <= 0 && k.lungeT <= 0 && k.lungeDash <= 0) want = 'JUMP';
       // touching the knight hurts and bounces the player off
       const near2 = { x: k.x - 3, y: k.y - 3, w: k.w + 6, h: k.h + 6 };
-      if (pDmgCd <= 0 && overlaps(near2, P)){
-        damage(10); pDmgCd = 60;
+      if (P.boost && overlaps(near2, P)){
+        k.hp = 0; k.dead = true; k.dieT = 0; k.attackT = 0; k.lungeT = 0; k.lungeDash = 0;   // plowed through
+      } else if (pDmgCd <= 0 && overlaps(near2, P)){
+        damage(10); pDmgCd = P_DMG_CD;
         P.vx = (P.x + P.w/2 < k.x + k.w/2 ? -1 : 1) * 4*U;
         P.vy = Math.min(P.vy, -2.2*U);
       }
@@ -696,7 +806,7 @@
   const CAM_SURF_Y = (SURF+2)*TILE - VIEW_H;
   const CAM_ROOM_Y = LH*TILE - VIEW_H;
   const cam = { x:0, y:CAM_SURF_Y };
-  const CAM_TRANS = 45;
+  const CAM_TRANS = SEC(0.3);   // camera pan between regions
   let camRegion = 1, camTrans = 0, camFromX = 0, camFromY = CAM_SURF_Y;
   const SCREENS_X = Math.max(1, Math.floor((LEVEL_PX_W - VIEW_W)/VIEW_W) + 1);
   const SCREENS_Y = 3;
@@ -709,8 +819,11 @@
     for (let c = 0; c < SCREENS_X; c++){
       let open = false, sol = false;
       for (let ty = SCREEN_BANDS[r][0]; ty < SCREEN_BANDS[r][1]; ty++)
-        for (let tx = c*SCREEN_TILES_X; tx < (c+1)*SCREEN_TILES_X; tx++)
-          if (map[ty][tx] === 0) open = true; else sol = true;
+        for (let tx = c*SCREEN_TILES_X; tx < (c+1)*SCREEN_TILES_X; tx++){
+          const mv = map[ty][tx];
+          if (mv === 0 || mv === 5) open = true;   // 5 is the invisible tree wall, not real structure
+          else sol = true;
+        }
       rooms[r].push(open && sol);
     }
   }
@@ -725,77 +838,82 @@
     return { col, region };
   }
 
-  // ---------- physics ----------
-  const EPS = 0.01;
-  function moveAxis(E, dx, dy){
-    if (dx !== 0){
-      E.x += dx;
-      const y0 = Math.floor(E.y/TILE), y1 = Math.floor((E.y+E.h-EPS)/TILE);
-      if (dx > 0){ const tx = Math.floor((E.x+E.w-EPS)/TILE);
-        for (let ty=y0;ty<=y1;ty++) if (solid(tx,ty)){ E.x = tx*TILE - E.w; E.vx=0; break; } }
-      else { const tx = Math.floor(E.x/TILE);
-        for (let ty=y0;ty<=y1;ty++) if (solid(tx,ty)){ E.x = (tx+1)*TILE; E.vx=0; break; } }
+  function updateBombs(){
+    for (let i = bombs.length - 1; i >= 0; i--){
+      const b = bombs[i];
+      if (!b.exploding){
+        b.vy += b.vy < 0 ? GRAV : GRAV_FALL;
+        if (b.vy > FALL_MAX) b.vy = FALL_MAX;
+        moveSwept(b, 0, b.vy);
+        if (grounded(b) && b.vy > 0) b.vy = 0;
+        if (--b.fuseT <= 0){
+          b.exploding = true; b.boomT = 0;
+          const bx = b.x + b.w/2, by = b.y + b.h/2;
+          if (bx >= cam.x - TILE && bx <= cam.x + VIEW_W + TILE && by >= cam.y - TILE && by <= cam.y + VIEW_H + TILE)
+            playBombSound();   // same rule as arrows: only heard on-screen plus a tile
+          for (const k of knights){
+            if (k.dead) continue;
+            if (Math.abs((k.x + k.w/2) - bx) < BOMB_RADIUS + k.w/2 &&
+                Math.abs((k.y + k.h/2) - by) < BOMB_RADIUS + k.h/2){
+              k.hp -= BOMB_DMG; k.hurtT = KN_HURT; k.attackT = 0; k.atkCd = Math.max(k.atkCd, SEC(0.14));
+              if (k.hp <= 0){ k.dead = true; k.dieT = 0; k.attackT = 0; k.lungeT = 0; k.lungeDash = 0; }
+            }
+          }
+        }
+      } else if (++b.boomT >= BOMB_BOOM){
+        bombs.splice(i, 1);
+      }
     }
-    if (dy !== 0){
-      E.y += dy;
-      const x0 = Math.floor(E.x/TILE), x1 = Math.floor((E.x+E.w-EPS)/TILE);
-      if (dy > 0){ const ty = Math.floor((E.y+E.h)/TILE);
-        for (let tx=x0;tx<=x1;tx++) if (solid(tx,ty)){ E.y = ty*TILE - E.h; E.vy=0; break; } }
-      else { const ty = Math.floor(E.y/TILE);
-        for (let tx=x0;tx<=x1;tx++) if (solid(tx,ty)){ E.y = (ty+1)*TILE; E.vy=0; break; } }
-    }
   }
-  // half-tile substeps so high speeds can't tunnel
-  function moveSwept(E, dx, dy){
-    const m = Math.max(Math.abs(dx), Math.abs(dy));
-    const steps = Math.max(1, Math.ceil(m / (TILE/2)));
-    for (let i = 0; i < steps; i++) moveAxis(E, dx/steps, dy/steps);
-  }
-  function grounded(E){
-    const ty = Math.floor((E.y+E.h+1)/TILE);
-    const x0 = Math.floor(E.x/TILE), x1 = Math.floor((E.x+E.w-EPS)/TILE);
-    for (let tx=x0;tx<=x1;tx++) if (solid(tx,ty)) return true;
-    return false;
-  }
-  function overlaps(a, b){
-    return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
-  }
-  function bboxSolid(x, y, w, h){
-    const x0 = Math.floor(x/TILE), x1 = Math.floor((x+w-EPS)/TILE);
-    const y0 = Math.floor(y/TILE), y1 = Math.floor((y+h-EPS)/TILE);
-    for (let ty = y0; ty <= y1; ty++) for (let tx = x0; tx <= x1; tx++) if (solid(tx, ty)) return true;
-    return false;
-  }
-
   function update(){
-    const sprint = keys['ShiftLeft'] || keys['ShiftRight'];
-    const maxSpd = sprint ? RUN_SPD : WALK_SPD;
     let ix = 0;
     if (keys['KeyA'] || keys['ArrowLeft'])  ix -= 1;
     if (keys['KeyD'] || keys['ArrowRight']) ix += 1;
-    if (ix !== 0){
+    if (P.boost){
+      if (ix !== 0){ P.boostDir = ix; P.boostIdle = 0; }        // steerable, but always full speed
+      else if (++P.boostIdle >= BOOST_IDLE) P.boost = false;    // let go of A/D for 0.5s -> stop
+      if (P.boost){ P.vx = P.boostDir * BOOST_SPD; if (P.attackT <= 0) P.face = P.boostDir; }
+    } else if (ix !== 0){
       P.vx += ix * ACCEL;
-      P.vx = Math.max(-maxSpd, Math.min(maxSpd, P.vx));
+      P.vx = Math.max(-WALK_SPD, Math.min(WALK_SPD, P.vx));
       if (P.attackT <= 0) P.face = ix;
     } else {
       if (Math.abs(P.vx) < FRIC) P.vx = 0; else P.vx -= Math.sign(P.vx)*FRIC;
     }
 
+    const fastFall = keys['KeyS'] && !P.onGround;   // hold S in the air to drop faster
     if (P.vy < 0){
-      P.vy += GRAV;
+      P.vy += GRAV * (fastFall ? 1.5 : 1);
       if (!keys['Space']) P.vy *= JUMP_CUT;   // analog jump height
     } else {
-      P.vy += GRAV_FALL;                      // gentle downward acceleration...
-      if (P.vy > FALL_MAX) P.vy = FALL_MAX;   // ...capped low so it never runs away
+      P.vy += GRAV_FALL * (fastFall ? 1.6 : 1);   // gentle downward acceleration, steeper with S
+      const cap = FALL_MAX * (fastFall ? 1.5 : 1);
+      if (P.vy > cap) P.vy = cap;             // capped low so it never runs away, higher with S
     }
     moveSwept(P, P.vx, 0);
     moveSwept(P, 0, P.vy);
     P.onGround = grounded(P);
     if (P.onGround){
       if (P.vy > 0) P.vy = 0;
-      P.coyote = 6;
+      P.coyote = P_COYOTE;
       const pn0 = groundNode(P); if (pn0 >= 0) pLastNode = pn0;
     } else if (P.coyote>0) P.coyote--;
+    // speed booster: airborne is fine (jump or fall), but landing after airborne ends it
+    if (P.boost){
+      if (!P.onGround) P.boostAir = true;
+      else if (P.boostAir) P.boost = false;
+    }
+    // charge it by running BOOST_TILES straight tiles, grounded, no jump/fall/damage
+    if (P.canBoost && !P.boost){
+      const btx = Math.floor((P.x + P.w/2)/TILE);
+      if (P.onGround && ix !== 0 && P.vx !== 0 && P.hurtT <= 0 && !P.charging){
+        if (ix !== P.runDir){ P.runDir = ix; P.runStartTile = btx; }
+        if ((btx - P.runStartTile) * ix >= BOOST_TILES){
+          P.boost = true; P.boostDir = ix; P.boostAir = false; P.boostIdle = 0;
+          P.attackT = 0; P.pendingShot = false; P.charging = false; chargeSndStop();   // abilities off during boost
+        }
+      } else { P.runDir = 0; P.runStartTile = btx; }
+    }
     if (P.jumpBuf>0) P.jumpBuf--;
     if (P.jumpBuf>0 && P.coyote>0){ P.vy = -JUMP_V; P.onGround=false; P.coyote=0; P.jumpBuf=0; playSfx('jump', 0.1); }
     // double jump: a second Space press in the air, once per airtime, after the pickup
@@ -805,8 +923,11 @@
     if (P.x < 0){ P.x=0; P.vx=0; }
     if (P.x > LEVEL_PX_W-P.w){ P.x=LEVEL_PX_W-P.w; P.vx=0; }
     if (P.y > LEVEL_PX_H + 40*U){ P.x=2*TILE; P.y=SURF*TILE - P.h; P.vx=P.vy=0; }
+    if (P.boost && P.vx === 0) P.boost = false;   // ran into a wall or the level edge
+    if (P.boost){ boostSndStart(); boostSndUpdate(); } else boostSndStop();
 
     updateKnights();
+    updateBombs();
 
     // enemies are solid: push the player out along the shallow axis, but never
     // into terrain
@@ -834,9 +955,15 @@
         pk.taken = true;
         if (pk.kind === 'double') P.canDouble = true;
         if (pk.kind === 'charge') P.canCharge = true;
+        if (pk.kind === 'bomb') P.canBomb = true;
+        if (pk.kind === 'boost') P.canBoost = true;
         notify(pk);
       }
     }
+
+    // how long left click has been held, so a power shot only winds up on a
+    // deliberate hold and a quick click stays silent
+    mouse.downT = mouse.down ? mouse.downT + 1 : 0;
 
     // frozen while charging so the drawn pose holds
     if (P.attackT > 0 && !P.charging) P.attackT--;
@@ -845,11 +972,16 @@
       P.charging = true; P.chargeT = 0;
     }
     if (P.charging){
-      P.chargeT = Math.min(P.chargeT + 1, CHARGE_MAX);
-      chargeSndStart(); chargeSndUpdate(P.chargeT / CHARGE_MAX);
+      // hold the drawn bow silently for the first half second. Only past that does
+      // the power shot wind up: charge climbs and the hum and streaks kick in.
+      if (mouse.downT >= CHARGE_DELAY){
+        P.chargeT = Math.min(P.chargeT + 1, CHARGE_MAX);
+        chargeSndStart(); chargeSndUpdate(P.chargeT / CHARGE_MAX);
+      }
       if (!mouse.down){
         chargeSndStop();
-        spawnArrow(P.chargeT / CHARGE_MAX);
+        const cg = P.chargeT / CHARGE_MAX;
+        if (cg >= CHARGE_MIN) spawnArrow(cg);   // too little charge, the release fires nothing
         P.charging = false;
         P.attackT = RECOVER_TICKS;
       }
@@ -909,30 +1041,49 @@
     const gaitOn = P.onGround && (P.attackT > 0 ? (P.legs === 'WALK' || P.legs === 'RUN')
                                                 : (P.anim === 'WALK' || P.anim === 'RUN'));
     const gaitFrame = P.attackT > 0 ? P.lframe : P.frame;
-    if (gaitOn && gaitFrame !== P.lastStep && (gaitFrame === 0 || gaitFrame === 5))
+    if (!P.boost && gaitOn && gaitFrame !== P.lastStep && (gaitFrame === 0 || gaitFrame === 5))
       playSfx('step', 0.025, 0.95 + Math.random()*0.1);
     P.lastStep = gaitOn ? gaitFrame : -1;
 
-    // arrows fly straight (no gravity)
-    for (const a of arrows){ a.x+=a.vx; a.y+=a.vy; a.life--;
-      for (const k of knights){
-        if (k.dead || a.life <= 0) continue;
-        if (a.x > k.x && a.x < k.x + k.w && a.y > k.y && a.y < k.y + k.h){
-          k.hp -= a.dmg; k.hurtT = KN_HURT; k.attackT = 0;
-          k.atkCd = Math.max(k.atkCd, 20);
+    // speed-booster stream: remember recent poses for the rainbow trail
+    if (P.boost){
+      P.trail.push({ x: P.x, y: P.y, face: P.face, anim: P.anim === 'ATTACK' ? 'RUN' : P.anim, frame: P.frame });
+      if (P.trail.length > 10) P.trail.shift();
+    } else if (P.trail.length) P.trail.shift();
+
+    // arrows fly straight (no gravity), swept in half-tile sub-steps so a fast or
+    // charged shot can't tunnel through a thin enemy or a one-tile wall
+    for (const a of arrows){
+      const dist = Math.hypot(a.vx, a.vy);
+      const steps = Math.max(1, Math.ceil(dist / (TILE/2)));
+      const sx = a.vx/steps, sy = a.vy/steps;
+      for (let s = 0; s < steps && a.life > 0; s++){
+        a.x += sx; a.y += sy;
+        for (const k of knights){
+          if (k.dead) continue;
+          if (a.x > k.x && a.x < k.x + k.w && a.y > k.y && a.y < k.y + k.h){
+            k.hp -= a.dmg; k.hurtT = KN_HURT; k.attackT = 0;
+            k.atkCd = Math.max(k.atkCd, SEC(0.14));
+            if (a.charge > 0.03) makeBurst(a.x, a.y, a.charge);
+            if (k.hp <= 0){ k.dead = true; k.dieT = 0; k.attackT = 0; k.lungeT = 0; k.lungeDash = 0; }
+            a.life = 0;
+            break;
+          }
+        }
+        const hv = map[Math.floor(a.y/TILE)] ? map[Math.floor(a.y/TILE)][Math.floor(a.x/TILE)] : 1;
+        if (a.life > 0 && hv !== 5 && solid(Math.floor(a.x/TILE), Math.floor(a.y/TILE))){
+          if (a.x >= cam.x - TILE && a.x <= cam.x + VIEW_W + TILE && a.y >= cam.y - TILE && a.y <= cam.y + VIEW_H + TILE){
+            if (a.charge > 0.03) playBoom();   // power shot lands with a deep boom instead of the plain thud
+            else playSfx(hv === 2 || hv === 3 ? 'wood' : 'dirt', hv === 2 || hv === 3 ? 0.45 : 0.9);
+          }
           if (a.charge > 0.03) makeBurst(a.x, a.y, a.charge);
-          if (k.hp <= 0){ k.dead = true; k.dieT = 0; k.attackT = 0; k.lungeT = 0; k.lungeDash = 0; }
+          // a full power shot spends itself in the burst, anything less sticks
+          if (a.charge < 0.98) stickArrow(a);
           a.life = 0;
         }
       }
-      if (a.life > 0 && solid(Math.floor(a.x/TILE), Math.floor(a.y/TILE))){
-        const hv = map[Math.floor(a.y/TILE)] ? map[Math.floor(a.y/TILE)][Math.floor(a.x/TILE)] : 1;
-        playSfx(hv === 2 || hv === 3 ? 'wood' : 'dirt', hv === 2 || hv === 3 ? 0.45 : 0.9);
-        if (a.charge > 0.03) makeBurst(a.x, a.y, a.charge);
-        // a full power shot spends itself in the burst, anything less sticks
-        if (a.charge < 0.98) stickArrow(a);
-        a.life = 0;
-      } }
+      if (a.life > 0) a.life--;   // lifetime ticks once per frame, not per sub-step
+    }
     for (let i=arrows.length-1;i>=0;i--) if (arrows[i].life<=0) arrows.splice(i,1);
     for (let i=fx.length-1;i>=0;i--) if (++fx[i].t > 28) fx.splice(i,1);
     for (let i=stuck.length-1;i>=0;i--) if (++stuck[i].t > STICK_LIFE) stuck.splice(i,1);
@@ -1162,23 +1313,104 @@
     noticeBtn = { x: bx, y: by, w: bw2, h: bh2 };
     ctx.textAlign = 'start'; ctx.textBaseline = 'alphabetic';
   }
+  const MONO = 'px ui-monospace, Menlo, Consolas, monospace';
+  // expanded pause menu: current keybinds + abilities (added as picked up) + quit
   function drawPaused(){
+    quitBtn = null;
     if (!paused) return;
-    ctx.fillStyle = 'rgba(6,8,12,0.5)';
-    ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-    const cx2 = VIEW_W/2, cy2 = VIEW_H/2;
-    const w = 60*U, h = 24*U;
-    ctx.fillStyle = 'rgba(14,16,19,0.94)';
-    roundRect(cx2 - w/2, cy2 - h/2, w, h, 2*U); ctx.fill();
-    ctx.strokeStyle = '#60e0d0';
-    roundRect(cx2 - w/2, cy2 - h/2, w, h, 2*U); ctx.stroke();
-    ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
-    ctx.font = 'bold ' + Math.round(5.5*U) + 'px ui-monospace, Menlo, Consolas, monospace';
-    ctx.fillStyle = '#e8ecf0';
-    ctx.fillText('Paused', cx2, cy2 - 5*U);
-    ctx.font = Math.round(3.5*U) + 'px ui-monospace, Menlo, Consolas, monospace';
-    keycapLine(cx2, cy2 + 4.5*U, 'Press', 'Esc', 'to resume');
+    ctx.fillStyle = 'rgba(6,8,12,0.62)'; ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    const rows = [['Move','A / D'], ['Jump','Space'], ['Fast fall','S (air)'], ['Aim / Shoot','L-Click']];
+    if (P.canDouble) rows.push(['Double jump','Space (air)']);
+    if (P.canCharge) rows.push(['Power shot','Hold L-Click']);
+    if (P.canBomb)   rows.push(['Bomb','Shift']);
+    if (P.canBoost){ rows.push(['Speed boost','Run 6 tiles']); rows.push(['Stop boost','S']); }
+    const cx2 = VIEW_W/2, lineH = 5.4*U, panelW = 82*U, headH = 11*U, footH = 20*U;
+    const panelH = headH + rows.length*lineH + footH, px = cx2 - panelW/2, py = VIEW_H/2 - panelH/2;
+    ctx.fillStyle = 'rgba(14,16,19,0.96)'; roundRect(px, py, panelW, panelH, 2*U); ctx.fill();
+    ctx.strokeStyle = '#60e0d0'; roundRect(px, py, panelW, panelH, 2*U); ctx.stroke();
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'center'; ctx.fillStyle = '#e8ecf0'; ctx.font = 'bold ' + Math.round(5.5*U) + MONO;
+    ctx.fillText('Paused', cx2, py + headH*0.55);
+    ctx.font = Math.round(3.3*U) + MONO;
+    let ly = py + headH + lineH*0.7;
+    for (const [label, key] of rows){
+      ctx.textAlign = 'left'; ctx.fillStyle = '#c2c8d0'; ctx.fillText(label, px + 6*U, ly);
+      const kw = ctx.measureText(key).width + 4*U, kx = px + panelW - 6*U - kw;
+      ctx.strokeStyle = '#60e0d0'; roundRect(kx, ly - 3*U, kw, 6*U, U); ctx.stroke();
+      ctx.textAlign = 'center'; ctx.fillStyle = '#60e0d0'; ctx.fillText(key, kx + kw/2, ly);
+      ly += lineH;
+    }
+    const bw = 44*U, bh = 8.5*U, bx = cx2 - bw/2, by = py + panelH - footH + 2*U;
+    const hov = inRect(mouse, { x: bx, y: by, w: bw, h: bh });
+    ctx.fillStyle = hov ? 'rgba(96,224,208,0.35)' : 'rgba(24,120,120,0.28)'; roundRect(bx, by, bw, bh, U); ctx.fill();
+    ctx.strokeStyle = hov ? '#d9fff8' : '#60e0d0'; roundRect(bx, by, bw, bh, U); ctx.stroke();
+    ctx.textAlign = 'center'; ctx.fillStyle = hov ? '#eafffb' : '#60e0d0'; ctx.font = 'bold ' + Math.round(3.6*U) + MONO;
+    ctx.fillText('Quit to Main Menu', cx2, by + bh/2);
+    quitBtn = { x: bx, y: by, w: bw, h: bh };
+    ctx.fillStyle = '#8a9099'; ctx.font = Math.round(2.9*U) + MONO;
+    ctx.fillText('Press Esc to resume', cx2, py + panelH - 4*U);
     ctx.textAlign = 'start'; ctx.textBaseline = 'alphabetic';
+  }
+  function drawMenu(){
+    playBtn = null;
+    if (!menu) return;
+    ctx.fillStyle = 'rgba(6,8,12,0.85)'; ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    const cx2 = VIEW_W/2, cy2 = VIEW_H/2;
+    ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
+    ctx.fillStyle = '#60e0d0'; ctx.font = 'bold ' + Math.round(13*U) + MONO;
+    ctx.fillText('ARROWVANIA', cx2, cy2 - 16*U);
+    ctx.fillStyle = '#8a9099'; ctx.font = Math.round(3.4*U) + MONO;
+    ctx.fillText('a tiny archer metroidvania', cx2, cy2 - 6*U);
+    const bw = 46*U, bh = 12*U, bx = cx2 - bw/2, by = cy2 + 3*U;
+    const hov = inRect(mouse, { x: bx, y: by, w: bw, h: bh });
+    ctx.fillStyle = hov ? 'rgba(96,224,208,0.4)' : 'rgba(24,120,120,0.3)'; roundRect(bx, by, bw, bh, 2*U); ctx.fill();
+    ctx.strokeStyle = hov ? '#d9fff8' : '#60e0d0'; roundRect(bx, by, bw, bh, 2*U); ctx.stroke();
+    ctx.fillStyle = hov ? '#eafffb' : '#60e0d0'; ctx.font = 'bold ' + Math.round(6*U) + MONO;
+    ctx.fillText('Play', cx2, by + bh/2);
+    playBtn = { x: bx, y: by, w: bw, h: bh };
+    ctx.fillStyle = '#6a7280'; ctx.font = Math.round(2.8*U) + MONO;
+    ctx.fillText('click Play or press Enter', cx2, by + bh + 6*U);
+    ctx.textAlign = 'start'; ctx.textBaseline = 'alphabetic';
+  }
+  // speed-booster rainbow stream. Filters are baked ONCE into hue-shifted run
+  // strips, so drawing the trail is just plain blits (no per-frame ctx.filter,
+  // which was the source of the boost lag).
+  const BOOST_HUES = 12;
+  let boostCache = null;
+  function buildBoostCache(){
+    boostCache = [];
+    const fw = Math.round(FW/SS), fh = Math.round(FH/SS);
+    for (let hi = 0; hi < BOOST_HUES; hi++){
+      const cv = document.createElement('canvas'); cv.width = fw*NF; cv.height = fh;
+      const g = cv.getContext('2d');
+      g.imageSmoothingEnabled = true;
+      g.filter = 'hue-rotate(' + Math.round(hi/BOOST_HUES*360) + 'deg) saturate(3) brightness(1.3)';
+      g.drawImage(IMG.archer, 0, ROW.RUN*FH, FW*NF, FH, 0, 0, fw*NF, fh);
+      boostCache.push(cv);
+    }
+  }
+  function drawBoostFx(){
+    if (!P.boost && !P.trail.length) return;
+    if (!boostCache) buildBoostCache();
+    const tm = performance.now() * 0.001;
+    const fw = Math.round(FW/SS), fh = Math.round(FH/SS);
+    if (P.boost){   // cheap rainbow glow behind the ranger, one gradient fill
+      const gx = P.x + P.w/2 - cam.x, gy = P.y + P.h*0.5 - cam.y, gr = 22, h = Math.round((tm*300) % 360);
+      const grd = ctx.createRadialGradient(gx, gy, 1, gx, gy, gr);
+      grd.addColorStop(0, 'hsla(' + h + ',100%,65%,0.5)'); grd.addColorStop(1, 'hsla(' + h + ',100%,65%,0)');
+      ctx.fillStyle = grd; ctx.beginPath(); ctx.arc(gx, gy, gr, 0, Math.PI*2); ctx.fill();
+    }
+    for (let i = 0; i < P.trail.length; i++){
+      const e = P.trail[i];
+      const spr = boostCache[(Math.floor(tm*10) + i) % BOOST_HUES];
+      ctx.save();
+      ctx.translate(Math.round(e.x + P.w/2 - cam.x), Math.round(e.y + P.h - cam.y));
+      if (e.face < 0) ctx.scale(-1, 1);
+      ctx.globalAlpha = (i / P.trail.length) * 0.55;
+      ctx.drawImage(spr, (e.frame % NF)*fw, 0, fw, fh, -AX/SS, -AY/SS, fw, fh);
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
   }
   // attack draws in layers: bow arm behind, movement legs, attack torso on top
   function drawPlayer(){
@@ -1210,7 +1442,6 @@
     ctx.imageSmoothingEnabled = false;
     ctx.restore();
   }
-  const ARROW_LEN = 0.95*TILE, ARROW_THICK = ARROW_LEN * (12/88);
   function drawChargeFx(){
     if (!P.charging) return;
     const g2 = gripWorld();
@@ -1341,7 +1572,7 @@
     for (const k of knights){
       const x = k.x + k.w/2 - cam.x, y = k.y - cam.y;
       const st = (k.dead ? 'DEAD' : k.aggro ? 'AGGRO' : k.resetting ? 'RESET' : 'idle') +
-                 (k.goalHome ? ' home' : '') + ' cd' + k.jmpCd + ' pT' + k.pathT;
+                 (k.goalHome ? ' home' : '') + (k.stranded ? ' lost' : '') + ' cd' + k.jmpCd + ' pT' + k.pathT;
       ctx.fillStyle = '#111';
       ctx.fillText(st, x - 40, y - 10);
       const r = k.route;
@@ -1357,9 +1588,48 @@
       }
     }
   }
+  let BOMB_SPRITE = null;
+  function bombSprite(){
+    if (BOMB_SPRITE) return BOMB_SPRITE;
+    const cv = document.createElement('canvas'); cv.width = 16; cv.height = 16;
+    const g = cv.getContext('2d');
+    const disc = (cx, cy, r, col) => { g.fillStyle = col; for (let y=-Math.ceil(r); y<=r; y++) for (let x=-Math.ceil(r); x<=r; x++) if (x*x+y*y<=r*r) g.fillRect(cx+x, cy+y, 1, 1); };
+    disc(8,10,5,'#123039'); disc(8,10,3,'#1f7aa6'); disc(8,10,1.5,'#a6ecff');
+    g.fillStyle = '#e6fbff'; g.fillRect(7,8,1,1);
+    g.fillStyle = '#0a1c22'; g.fillRect(3,10,11,1);
+    return (BOMB_SPRITE = cv);
+  }
+  function drawBombs(){
+    for (const b of bombs){
+      if (!b.exploding){
+        const pulse = 0.5 + 0.5*Math.sin(b.fuseT * (0.15 + 0.5*(1 - b.fuseT/BOMB_FUSE)));
+        ctx.save();
+        ctx.imageSmoothingEnabled = false;
+        ctx.shadowColor = 'rgba(120,230,255,' + (0.35 + 0.5*pulse).toFixed(3) + ')';
+        ctx.shadowBlur = 3 + 7*pulse;
+        ctx.drawImage(bombSprite(), b.x - cam.x, b.y - cam.y, b.w, b.h);
+        ctx.restore();
+      } else {
+        const p = Math.min(1, b.boomT / BOMB_BOOM);
+        const cx = b.x + b.w/2 - cam.x, cy = b.y + b.h/2 - cam.y;
+        const r = BOMB_RADIUS * Math.min(1, p / 0.6);
+        const a = Math.min(1, (1 - p) / 0.35);
+        ctx.save();
+        const grad = ctx.createRadialGradient(cx, cy, 1, cx, cy, Math.max(1, r));
+        grad.addColorStop(0, '#ffffff'); grad.addColorStop(0.45, '#a6ecff'); grad.addColorStop(1, '#1f7aa6');
+        ctx.globalAlpha = a;
+        ctx.fillStyle = grad;
+        ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI*2); ctx.fill();
+        ctx.strokeStyle = '#dffcff'; ctx.lineWidth = Math.max(1, 3.5*a);
+        ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI*2); ctx.stroke();
+        ctx.globalAlpha = 1;
+        ctx.restore();
+      }
+    }
+  }
   function render(){
     ctx.setTransform(SCALE,0,0,SCALE,0,0);
-    drawBackground(); drawTiles(); drawStuck(); drawPickups(); drawKnights(); drawKFx(); drawArrows(); drawFX(); drawPlayer(); drawChargeFx(); drawCrowns(); drawHUD(); drawDebug(); drawNotice(); drawPaused();
+    drawBackground(); drawTiles(); drawStuck(); drawPickups(); drawKnights(); drawKFx(); drawArrows(); drawFX(); drawBoostFx(); drawPlayer(); drawChargeFx(); drawBombs(); drawCrowns(); drawHUD(); drawDebug(); drawNotice(); drawPaused(); drawMenu();
   }
 
   // ---------- responsive fit ----------
@@ -1382,23 +1652,35 @@
   fitApp();
 
   // ---------- sound controls ----------
-  const SND = { music: { vol: 0.5, muted: false }, sfx: { vol: 0.5, muted: false } };
   for (const id of ['music','sfx']){
     const btn = document.getElementById(id+'-mute-btn');
     const sld = document.getElementById(id+'-slider');
     if (!btn || !sld) continue;
     const ch = SND[id];
     const apply = () => { btn.textContent = ch.muted ? '\u{1F507}' : '\u{1F50A}'; btn.classList.toggle('muted', ch.muted); sld.disabled = ch.muted; };
-    btn.addEventListener('click', () => { ch.muted = !ch.muted; apply(); });
-    sld.addEventListener('input', () => { ch.vol = sld.value / 100; });
+    btn.addEventListener('click', () => { ch.muted = !ch.muted; apply(); if (id === 'music') updateMusicVol(); });
+    sld.addEventListener('input', () => { ch.vol = sld.value / 100; if (id === 'music') updateMusicVol(); });
     apply();
   }
 
   // ---------- loop ----------
-  let loaded = 0; const need = 8;
-  for (const k of ['archer','bowarm','grass','dirt','arrow','bark','leaf','knight']){
+  const STEP_MS = 1000/SIM_HZ, MAX_ACC = STEP_MS*8;
+  let acc = 0, lastT = null;
+  function loop(now){
+    if (lastT == null) lastT = now;
+    acc = Math.min(acc + (now - lastT), MAX_ACC);
+    lastT = now;
+    if (!menu && !paused && !notice){
+      while (acc >= STEP_MS){ update(); acc -= STEP_MS; }
+    } else { chargeSndStop(); boostSndStop(); acc = 0; }
+    render();
+    requestAnimationFrame(loop);
+  }
+  let loaded = 0;
+  const imgKeys = ['archer','bowarm','grass','dirt','arrow','bark','leaf','knight'];
+  const need = imgKeys.length;
+  for (const k of imgKeys){
     IMG[k].onload = () => { if (++loaded===need) requestAnimationFrame(loop); };
     IMG[k].onerror = () => { console.error('asset failed to decode: '+k); if (++loaded===need) requestAnimationFrame(loop); };
   }
-  function loop(){ if (!paused && !notice) update(); else chargeSndStop(); render(); requestAnimationFrame(loop); }
 })();

@@ -1,0 +1,130 @@
+/* Headless tests for the pure game logic in logic.js.
+   Zero dependencies, run with:  node --test  (Node 18+) */
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const LOGIC = require('../logic.js');
+
+const TILE = 64, EPS = 0.01;
+
+// Build a small level from an ASCII sketch. '#' is solid, '.' is open.
+// Row 0 is the top. Returns { map, LW, LH } shaped like the game's map.
+function level(rows) {
+  const LH = rows.length, LW = rows[0].length;
+  const map = rows.map(r => Array.from(r, ch => (ch === '#' ? 1 : 0)));
+  return { map, LW, LH };
+}
+function physFor(rows) {
+  const { map, LW, LH } = level(rows);
+  return LOGIC.createPhysics({ TILE, EPS, LW, LH, map });
+}
+const node = (LW, tx, ty) => ty * LW + tx;
+
+test('solveJumpV reaches the requested height under gravity', () => {
+  const grav = 0.55, h = 3 * TILE;
+  const v0 = LOGIC.solveJumpV(grav, h);
+  // integrate exactly as the game does on ascent: add gravity, then move
+  let y = 0, vy = -v0, peak = 0;
+  for (let i = 0; i < 1000; i++) { vy += grav; y += vy; peak = Math.min(peak, y); if (vy > 0) break; }
+  assert.ok(Math.abs(-peak - h) <= grav, `apex ${-peak} within one step of ${h}`);
+});
+
+test('overlaps is symmetric and edge-exclusive', () => {
+  const a = { x: 0, y: 0, w: 10, h: 10 };
+  assert.equal(LOGIC.overlaps(a, { x: 5, y: 5, w: 10, h: 10 }), true);
+  assert.equal(LOGIC.overlaps(a, { x: 10, y: 0, w: 10, h: 10 }), false); // touching edge only
+  assert.equal(LOGIC.overlaps(a, { x: 20, y: 0, w: 5, h: 5 }), false);
+});
+
+test('solid treats off-map sides as open and the floor as closed', () => {
+  const { solid } = physFor([
+    '....',
+    '####',
+  ]);
+  assert.equal(solid(1, 1), true);   // the floor tile
+  assert.equal(solid(1, 0), false);  // open air
+  assert.equal(solid(-1, 0), false); // left of the map is open
+  assert.equal(solid(0, 99), true);  // below the map is solid
+});
+
+test('soft leaves (4) pass through but the invisible wall (5) blocks entities', () => {
+  const { map, LW, LH } = level(['....', '####']);
+  map[0][0] = 4;   // soft leaf
+  map[0][1] = 5;   // invisible tree wall
+  const { solid } = LOGIC.createPhysics({ TILE, EPS, LW, LH, map });
+  assert.equal(solid(0, 0), false); // arrows and bodies pass soft leaves
+  assert.equal(solid(1, 0), true);  // the wall stops bodies (arrows are excluded at the arrow check)
+});
+
+test('standable is the floor tile itself with two clear tiles above it', () => {
+  const { standable } = physFor([
+    '....',
+    '#..#',
+    '####',
+  ]);
+  assert.equal(standable(1, 2), true);  // floor tile, open air above
+  assert.equal(standable(0, 1), true);  // top of the left wall, clear above
+  assert.equal(standable(1, 1), false); // air, nothing solid to stand on
+  assert.equal(standable(1, 0), false); // air with no floor below
+});
+
+test('moveSwept stops an entity at a wall instead of tunneling through it', () => {
+  const { moveSwept } = physFor([
+    '.....',
+    '..#..',   // wall at column 2, same row the body occupies
+    '.....',
+    '#####',
+  ]);
+  const E = { x: 0, y: 1 * TILE, w: TILE * 0.5, h: TILE, vx: 0, vy: 0 };
+  moveSwept(E, 10 * TILE, 0); // hurl it right, far past the wall
+  assert.ok(E.x + E.w <= 2 * TILE + 0.001, `stopped before the wall, got ${E.x}`);
+  assert.equal(E.vx, 0);
+});
+
+test('grounded is true resting on a floor and false in the air', () => {
+  const { grounded } = physFor(['....', '....', '####']);
+  const onFloor = { x: TILE, y: 1 * TILE, w: TILE * 0.5, h: TILE };
+  const inAir = { x: TILE, y: 0, w: TILE * 0.5, h: TILE };
+  assert.equal(grounded(onFloor), true);
+  assert.equal(grounded(inAir), false);
+});
+
+test('bfsRoute walks a flat floor and reconstructs the path', () => {
+  const rows = ['........', '########'];
+  const { bfsRoute } = physFor(rows);
+  const LW = rows[0].length;
+  const start = node(LW, 1, 1), goal = node(LW, 6, 1); // nodes are the floor tiles
+  const prev = bfsRoute(start, goal, false);
+  assert.ok(prev, 'a route exists along the floor');
+  let n = goal, hops = 0;
+  while (n !== start && hops < 100) { n = prev[n]; hops++; }
+  assert.equal(n, start);
+});
+
+test('bfsRoute needs a jump to climb a one-tile step', () => {
+  // left floor at row 3, a step up to a platform whose top is row 2
+  const rows = [
+    '......',
+    '......',
+    '...###',
+    '######',
+  ];
+  const { bfsRoute } = physFor(rows);
+  const LW = rows[0].length;
+  const start = node(LW, 1, 3); // left floor tile
+  const goal = node(LW, 4, 2);  // platform tile, one up and blocked by the step
+  assert.equal(bfsRoute(start, goal, false), null, 'the step blocks a plain walk');
+  assert.ok(bfsRoute(start, goal, true), 'reachable once jumps are allowed');
+});
+
+test('bfsRoute returns null when the goal is walled off', () => {
+  const rows = [
+    '...#...',
+    '...#...',
+    '...#...',
+    '#######',
+  ];
+  const { bfsRoute } = physFor(rows);
+  const LW = rows[0].length;
+  const start = node(LW, 1, 3), goal = node(LW, 5, 3);
+  assert.equal(bfsRoute(start, goal, true), null);
+});
