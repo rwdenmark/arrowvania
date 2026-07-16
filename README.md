@@ -10,7 +10,7 @@ Opens http://localhost:8080 in your browser. Any static file server works too, e
 
 ## Controls
 
-A/D move, Shift sprint, Space jump, left click aims and shoots, Esc pauses. Abilities are found in the world.
+A/D move, Space jump, S to fast-fall, left click aims and shoots, Esc pauses. Abilities are found in the world.
 
 ## Assets
 
@@ -18,4 +18,4 @@ The archer is rebuilt from the Spriter rig in the craftpix 2D Fantasy Archer pac
 
 ## Sound
 
-Effects are baked into `assets.js` by `assets/build_sfx.py`. Most are synthesized from scratch. The footsteps and the wood impact are trimmed from free sample packs and the bow release is reused from my Recurve project. The source WAVs are not committed. The charge hum is generated live with WebAudio so it can hold for as long as the button is held. Check the art and sample licenses before distributing.
+Sound effects are baked into `assets.js` by `assets/build_sfx.py`, most synthesized from scratch. The footsteps and the wood impact are trimmed from free sample packs, and the bow release is reused from my Recurve project. The charge hum, power-shot boom, bomb blast, and speed-boost shimmer are generated live with WebAudio. The menu button click (`card_select.mp3`) is reused from Recurve, and the menu music (`menu.mp3`) is a Pixabay track. Check the art, music, and sample licenses before distributing.

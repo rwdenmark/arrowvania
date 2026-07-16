@@ -14,6 +14,17 @@
     return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
   }
 
+  // charge (0..1) maps to arrow damage 1..10, a plain click (no charge) does 1
+  function arrowDamage(charge) {
+    return Math.round(1 + 9 * (charge || 0));
+  }
+
+  // player momentum projected onto the aim, clamped so a shot fired against your
+  // motion never loses speed. c and sn are cos/sin of the aim, face is +/-1.
+  function aimBoost(vx, vy, c, sn, face) {
+    return Math.max(0, vx * c * face + vy * sn);
+  }
+
   // Everything that needs the level geometry is bound to one map/dimensions set.
   // Call sites keep the same names via destructuring, so the game reads unchanged.
   function createPhysics(opts) {
@@ -140,7 +151,7 @@
     return { solid, standable, moveAxis, moveSwept, grounded, overlaps, bboxSolid, bfsRoute };
   }
 
-  const LOGIC = { solveJumpV, overlaps, createPhysics };
+  const LOGIC = { solveJumpV, overlaps, arrowDamage, aimBoost, createPhysics };
   if (typeof module !== 'undefined' && module.exports) module.exports = LOGIC;
   else root.LOGIC = LOGIC;
 })(typeof window !== 'undefined' ? window : globalThis);

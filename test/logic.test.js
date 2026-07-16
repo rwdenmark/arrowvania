@@ -128,3 +128,20 @@ test('bfsRoute returns null when the goal is walled off', () => {
   const start = node(LW, 1, 3), goal = node(LW, 5, 3);
   assert.equal(bfsRoute(start, goal, true), null);
 });
+
+test('arrowDamage maps charge 0..1 onto damage 1..10', () => {
+  assert.equal(LOGIC.arrowDamage(0), 1);      // a plain click
+  assert.equal(LOGIC.arrowDamage(1), 10);     // full charge
+  assert.equal(LOGIC.arrowDamage(0.5), 6);    // round(1 + 4.5) = 6
+  assert.equal(LOGIC.arrowDamage(), 1);       // missing charge behaves like 0
+});
+
+test('aimBoost adds motion along the aim and never against it', () => {
+  // aim straight right (c=1, sn=0), facing right
+  assert.equal(LOGIC.aimBoost(2, 0, 1, 0, 1), 2);   // moving into the shot: full boost
+  assert.equal(LOGIC.aimBoost(-2, 0, 1, 0, 1), 0);  // moving against it: clamped to 0
+  // facing left (face=-1) and moving left is still motion along the aim
+  assert.equal(LOGIC.aimBoost(-2, 0, 1, 0, -1), 2);
+  // vertical: aim straight down (c=0, sn=1) while falling adds the fall speed
+  assert.equal(LOGIC.aimBoost(0, 3, 0, 1, 1), 3);
+});
