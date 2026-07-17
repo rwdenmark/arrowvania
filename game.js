@@ -1,7 +1,7 @@
 /* Arrowvania
-   A/D move, Space jump (double after pickup), S fast-fall,
+   A/D move, Space jump (double after pickup), S fast-fall in the air / crouch on the ground,
    left click shoot, hold to charge (after pickup),
-   Shift drop bomb, Esc pause. */
+   Shift dash, Q drop bomb, 1 spawn menu, 2 enemy info, Esc pause. */
 (() => {
   const TILE = ASSETS.TILE || 32;
   const U = TILE / 16;                 // resolution multiplier vs the original 16px design
@@ -20,7 +20,10 @@
   function img(src){ const i = new Image(); i.src = src; return i; }
   const IMG = { archer: img(ASSETS.archer), bowarm: img(ASSETS.bowarm),
                 grass: img(ASSETS.grass), dirt: img(ASSETS.dirt), arrow: img(ASSETS.arrow),
-                bark: img(ASSETS.bark), leaf: img(ASSETS.leaf), knight: img(ASSETS.knight) };
+                bark: img(ASSETS.bark), leaf: img(ASSETS.leaf), knight: img(ASSETS.knight),
+                ngrass: img(ASSETS.night_grass), ndirt: img(ASSETS.night_dirt),
+                nbark: img(ASSETS.night_bark), nleaf: img(ASSETS.night_leaf) };
+  for (const ek of ['knight2','knight3','troll1','troll2','troll3','skel1','skel2','skel3','necro1','necro2','necro3']) IMG[ek] = img(ASSETS[ek]);
   // sheet is baked at SS x resolution, all ASSETS pixel metadata is in sheet px
   const SS = ASSETS.SPRITE_SCALE || 1;
   const FW = ASSETS.FRAME_W, FH = ASSETS.FRAME_H, NF = ASSETS.FRAMES;
@@ -79,7 +82,8 @@
     anim:'IDLE', frame:0, ftime:0, attackT:0, pendingShot:false, coyote:0, jumpBuf:0,
     canDouble:false, usedDouble:false, canCharge:false, canBomb:false, charging:false, chargeT:0,
     aim:0, legs:'IDLE', lframe:0, ltime:0, hurtT:0, lastStep:-1,
-    canBoost:false, boost:false, boostDir:1, boostIdle:0, runDir:0, runStartTile:0, trail:[]
+    canBoost:false, boost:false, boostDir:1, boostIdle:0, runDir:0, runStartTile:0, trail:[],
+    crouch:false, crouchT:0, dashT:0, dashDir:1, dashCd:0, dashFx:0
   }; }
   const P = freshPlayer();
   const P_HURT = SEC(0.1);         // player flinch
@@ -87,7 +91,15 @@
   const P_JUMP_BUF = SEC(0.055);   // remember a jump pressed just before landing
   const P_DMG_CD = SEC(0.4);       // i-frames after the player takes a hit
   const WALK_SPD=1.02*U, ACCEL=0.5*U, FRIC=0.5*U;   // walk is 20% faster than before, no sprint
-  const BOOST_SPD=2.6*U, BOOST_TILES=6, BOOST_IDLE=SEC(0.5);   // run 6 tiles to charge, release A/D 0.5s to stop
+  // crouch: hold S on the ground, half height, slower walk. STAND_H mirrors freshPlayer's h
+  const STAND_H = Math.round(1.125*TILE), CROUCH_H = Math.round(0.5625*TILE);
+  const CROUCH_SPD = 0.55*WALK_SPD;
+  // dash (Shift): 5-tile burst, ground or air (altitude held). A wall or a jump ends it
+  const DASH_TICKS = SEC(0.185);
+  const DASH_SPD = 5*TILE / DASH_TICKS;          // covers exactly 5 tiles, same burst speed
+  const DASH_CD = SEC(5);                        // cooldown between dashes
+  const DASH_FADE = SEC(0.06);                   // echo trail fade-out after the dash
+  const BOOST_SPD=2.6*U, BOOST_TILES=8, BOOST_IDLE=SEC(0.5);   // run 8 tiles to charge, release A/D 0.5s to stop
   // analog jump, hold Space up to 3 tiles. JUMP_V solves the discrete integration so the apex is exact
   const GRAV = 0.1375*U;
   const JUMP_H_MAX = 3*TILE;
@@ -106,7 +118,7 @@
   const CHARGE_DELAY = SEC(0.5);   // hold left click this long before a power shot winds up
   const CHG_TINT = [63,142,252], CHG_CORE = [232,246,255], CHG_TINT_MAX = 0.9;
   const CHG_GLOW = 'rgba(80,160,255,', CHG_GLOW_MAX = 8;
-  // bombs (Shift to drop): up to 3 live at once, 3s fuse, cyan blast over 1s
+  // bombs (Q to drop): up to 3 live at once, 3s fuse, cyan blast over 1s
   const BOMB_SIZE = Math.round(TILE/3);
   const BOMB_FUSE = SEC(3), BOMB_BOOM = SEC(1);
   const BOMB_RADIUS = 0.5*TILE, BOMB_DMG = 10, BOMB_MAX = 3;
@@ -116,7 +128,7 @@
   // master mix, SFX_GAIN halves every effect on top of the SFX slider
   const SFX_GAIN = 0.5;
   const SND = { music: { vol: 0.5, muted: false }, sfx: { vol: 0.5, muted: false } };
-  // remember the player's sound settings between sessions (same idea as Recurve / Astro Siege)
+  // persist the player's sound settings
   try {
     const p = JSON.parse(localStorage.getItem('arrowvania.audio') || '{}');
     if (typeof p.musicVol === 'number') SND.music.vol = p.musicVol;
@@ -149,7 +161,6 @@
         .then(b => { sfxBuf[k] = b; })
         .catch(err => console.error('sfx failed to decode: ' + k, err)));
     }
-    // the UI click for the Play button (same asset Recurve uses)
     sfxReady.push(fetch('card_select.mp3').then(r => r.arrayBuffer()).then(b => AC.decodeAudioData(b))
       .then(b => { sfxBuf['select'] = b; })
       .catch(err => console.error('sfx failed to decode: select', err)));
@@ -288,9 +299,14 @@
       }
       return;
     }
-    if (e.code === 'Escape' && !notice && !gameOver && !e.repeat){ paused = !paused; if (!paused){ P.jumpBuf = 0; cancelStaleCharge(); } }
-    if (e.code === 'F3') debugAI = !debugAI;
-    if ((e.code === 'ShiftLeft' || e.code === 'ShiftRight') && !e.repeat && !paused && !notice && !gameOver) tryDropBomb();
+    if (e.code === 'Escape' && !notice && !gameOver && !e.repeat){
+      if (spawnMenu) spawnMenu = false;
+      else { paused = !paused; if (!paused){ P.jumpBuf = 0; cancelStaleCharge(); } }
+    }
+    if (e.code === 'Digit2') debugAI = !debugAI;   // enemy info overlay, was F3
+    if (e.code === 'Digit1' && !e.repeat && !paused && !notice && !gameOver) spawnMenu = !spawnMenu;
+    if (e.code === 'KeyQ' && !e.repeat && !paused && !notice && !gameOver) tryDropBomb();
+    if ((e.code === 'ShiftLeft' || e.code === 'ShiftRight') && !e.repeat && !paused && !notice && !gameOver) tryDash();
     if (e.code === 'KeyS' && P.boost) P.boost = false;   // press S to stop the speed booster immediately
     if (e.code === 'Space'){ if (!e.repeat && !paused && !notice && !gameOver) P.jumpBuf = P_JUMP_BUF; e.preventDefault(); }
   });
@@ -317,13 +333,16 @@
     toWorldMouse(e);
     if (menu){
       startMenuMusic();
-      if (codeEntry) return;   // the code panel is keyboard driven
+      if (codeEntry){
+        if (inRect(mouse, codeBackBtn)){ playSfx('select', 1.5); codeEntry = null; }
+        return;   // otherwise the code panel is keyboard driven
+      }
       if (mapBtns) for (let i = 0; i < MAPS.length; i++){
         if (!MAPS[i].locked && inRect(mouse, mapBtns[i])){ selectedMap = i; playSfx('select', 1.5); return; }
       }
       if (inRect(mouse, godBtn)){ godMode = !godMode; playSfx('select', 1.5); return; }
-      if (inRect(mouse, contBtn) && saveData && saveData.map === selectedMap){ playSfx('select', 1.5); startRun(saveData); return; }
-      if ((inRect(mouse, playBtn) || inRect(mouse, newBtn)) && !MAPS[selectedMap].locked){ playSfx('select', 1.5); startRun(null); return; }
+      if (inRect(mouse, contBtn) && saveData){ selectedMap = saveData.map; playSfx('select', 1.5); startRun(saveData); return; }
+      if (inRect(mouse, newBtn) && selectedMap >= 0 && !MAPS[selectedMap].locked){ playSfx('select', 1.5); startRun(null); return; }
       if (inRect(mouse, codeBtn)){ playSfx('select', 1.5); codeEntry = { text: '', err: false }; return; }
       return;
     }
@@ -332,7 +351,25 @@
       return;
     }
     if (gameOver){
-      if (inRect(mouse, gameOverBtn)){ playSfx('select', 1.5); resetGame(); }
+      if (inRect(mouse, gameOverLoadBtn) && saveData){
+        playSfx('select', 1.5);
+        resetGame();                    // clean slate, then straight back into the run
+        selectedMap = saveData.map;
+        startRun(saveData);
+      }
+      else if (inRect(mouse, gameOverBtn)){ playSfx('select', 1.5); resetGame(); }
+      return;
+    }
+    if (spawnMenu){
+      if (spawnBtns) for (const b of spawnBtns){
+        if (inRect(mouse, b)){
+          playSfx('select', 1.5);
+          if (spawnEnemyAt(b.type)) spawnMenu = false;
+          return;
+        }
+      }
+      if (spawnPanel && inRect(mouse, spawnPanel)) return;   // panel body: stay open
+      spawnMenu = false;   // a click outside the panel closes it
       return;
     }
     if (paused){
@@ -397,13 +434,58 @@
     bombs.push({ x: P.x + P.w/2 - BOMB_SIZE/2, y: P.y + P.h - BOMB_SIZE, w: BOMB_SIZE, h: BOMB_SIZE,
                  vy: 0, fuseT: BOMB_FUSE, exploding: false, boomT: 0 });
   }
+  function tryDash(){
+    if (P.dashT > 0 || P.dashCd > 0 || P.boost || P.crouch) return;
+    let dir = 0;
+    if (keys['KeyA'] || keys['ArrowLeft'])  dir -= 1;
+    if (keys['KeyD'] || keys['ArrowRight']) dir += 1;
+    P.dashDir = dir || P.face;
+    P.dashT = DASH_TICKS; P.dashCd = DASH_CD; P.dashFx = DASH_TICKS + DASH_FADE;
+    playSfx('jump', 0.12, 0.55);   // placeholder whoosh, a low-pitched jump
+  }
   function tryShoot(){
     if (P.boost) return;   // no shooting while boosting
     // recovery is interruptible, so rapid clicks keep the full fire rate
     if (P.attackT > 0 && (P.pendingShot || P.frame < RELEASE_FRAME)) return;
     P.attackT = ATTACK_DUR; P.pendingShot = true;
   }
+  // ---------- crouch pose (D "kneel lean") ----------
+  // LEGS layer squashed about the feet line + torso region leant over a hip pivot.
+  // Sheet px, tuned against the approved v4 strip
+  const CR_REG_TOP = 105, CR_REG_H = 125;        // torso region inside a frame
+  const CR_PIV = [82, 119];                      // hip pivot in region coords
+  const CR_TORSO_SCL = 0.70;                     // torso height scale after the lean
+  const CR_LEGS_W = 1.20, CR_LEGS_H = 42;        // boots widen, content height in the LEGS rows
+  const CR_BASE_FWD = 5;                         // boots ride slightly forward under the lean
+  // attack reaction per frame [lean deg, torso dx, boots dx, boots squash]:
+  // 0-4 brace into the draw, 5 snaps back on release, 6-9 ease home
+  const CR_PARAMS = [[-8,0,0,.45],[-9,1,1,.45],[-10,2,2,.45],[-11,3,2,.45],[-11.5,3,3,.45],
+                     [-6,-3,0,.41],[-7,-2,1,.43],[-7.5,-1,0,.44],[-8,0,0,.45],[-8,0,0,.45]];
+  const CR_IDLE_POSE = [-8,0,0,.45];
+  function crouchPose(){ return (P.anim === 'ATTACK' && CR_PARAMS[P.frame]) || CR_IDLE_POSE; }
+  function crouchPivot(pose){
+    return [CR_PIV[0] + 6 + pose[1] - AX, 6 - Math.round(CR_LEGS_H*pose[3])];
+  }
+  // where the bow shoulder lands once the torso region is leant and squashed
+  function crouchShoulder(pose){
+    const sh = SHOULDER[P.frame] || SHOULDER[0];
+    const th = -pose[0]*Math.PI/180;
+    const dx = AX + sh[0] - CR_PIV[0], dy = AY + sh[1] - CR_REG_TOP - CR_PIV[1];
+    const pv = crouchPivot(pose);
+    return [pv[0] + dx*Math.cos(th) - dy*Math.sin(th),
+            pv[1] + CR_TORSO_SCL*(dx*Math.sin(th) + dy*Math.cos(th))];
+  }
+  function standFromCrouch(){
+    if (!P.crouch) return true;
+    if (bboxSolid(P.x, P.y - (STAND_H - CROUCH_H), P.w, STAND_H)) return false;
+    P.crouch = false; P.y -= STAND_H - CROUCH_H; P.h = STAND_H;
+    return true;
+  }
   function shoulderWorld(){
+    if (P.crouch){
+      const cs = crouchShoulder(crouchPose());
+      return { x: P.x + P.w/2 + P.face*cs[0]/SS, y: P.y + P.h + cs[1]/SS };
+    }
     const sh = SHOULDER[P.frame] || SHOULDER[0];
     return { x: P.x + P.w/2 + P.face*sh[0]/SS, y: P.y + P.h + sh[1]/SS };
   }
@@ -420,7 +502,6 @@
     const a = Math.atan2((cam.y + mouse.sy) - s.y, ((cam.x + mouse.sx) - s.x) * P.face);
     P.aim = Math.max(-Math.PI/2, Math.min(Math.PI/2, a));
   }
-  // white light streaks drawn into the arrow while a power shot charges
   const chargeFx = [];
   function decayStreaks(list){
     for (let i = list.length - 1; i >= 0; i--){
@@ -478,19 +559,18 @@
       title: 'Double Jump', verb: 'Press', key: 'Space', tail: 'in the air to use' },
     { x: 19*TILE, y: 10*TILE, w: TILE, h: TILE, taken: false, kind: 'charge',
       fill: '#e8f6ff', edge: '#3f8efc', glow: 'rgba(80,160,255,0.9)',
-      title: 'Power Shot', verb: 'Hold', key: 'L-Click', tail: 'to charge, release to fire' },
+      title: 'Power Shot', verb: 'Hold', key: 'M-L', tail: 'to charge, release to fire' },
     { x: 25*TILE, y: 10*TILE, w: TILE, h: TILE, taken: false, kind: 'bomb',
       fill: '#1f7aa6', edge: '#a6ecff', glow: 'rgba(120,230,255,0.9)',
-      title: 'Bombs', verb: 'Press', key: 'Shift', tail: 'to drop, up to 3' },
+      title: 'Bombs', verb: 'Press', key: 'Q', tail: 'to drop, up to 3' },
     { x: 25*TILE, y: 28*TILE, w: TILE, h: TILE, taken: false, kind: 'boost',
       fill: '#c04b7a', edge: '#ffe27a', glow: 'rgba(255,120,200,0.9)',
-      title: 'Speed Booster', verb: 'Run', key: '6 tiles', tail: 'straight to charge' },
+      title: 'Speed Booster', verb: 'Run', key: '8 tiles', tail: 'straight to charge' },
   ];
   // ---------- save stations: touch one to save + heal, the code restores anywhere ----------
   const STATIONS = [
-    { tx: 5,  fr: SURF, armed: true },   // surface, near the spawn
-    { tx: 18, fr: 29,   armed: true },   // underground room
-    { tx: 17, fr: 11,   armed: true },   // sky room
+    { tx: 18, fr: 29, armed: true },   // underground room
+    { tx: 17, fr: 11, armed: true },   // sky room
   ];
   const ABILITY_BITS = { double: 1, charge: 2, bomb: 4, boost: 8 };
   function abilitiesMask(){
@@ -521,14 +601,48 @@
   }
   // pickup notification modal, pauses the game until Continue is clicked
   let notice = null, noticeBtn = null, paused = false;
-  let menu = true, playBtn = null, quitBtn = null, resumeBtn = null;
+  let spawnMenu = false, spawnBtns = null, spawnPanel = null;
+  const SPAWN_LIST = ['knight1','knight2','knight3','troll1','troll2','troll3',
+                      'skel1','skel2','skel3','necro1','necro2','necro3'];
+  // spawn placement: 6 tiles ahead, else 6 behind, else the nearest standable
+  // column about 6 tiles out. standable() already demands two clear tiles above
+  function spawnSpotNear(){
+    const pt = Math.floor((P.x + P.w/2)/TILE);
+    const pf = Math.floor((P.y + P.h - 1)/TILE) + 1;
+    const pband = bandOf(P.y + P.h/2);
+    function spotAt(col){
+      if (col < 1 || col > LW - 2) return null;
+      let best = null;
+      for (let row = 2; row < LH; row++){
+        if (!standable(col, row)) continue;
+        if (bandOf((row - 1)*TILE) !== pband) continue;   // stay in the player's band
+        if (best === null || Math.abs(row - pf) < Math.abs(best - pf)) best = row;
+      }
+      return best === null ? null : { col, row: best };
+    }
+    const dirs = P.face >= 0 ? [1, -1] : [-1, 1];
+    for (const s of dirs){ const sp = spotAt(pt + s*6); if (sp) return sp; }
+    for (const d of [5, 7, 4, 8, 3, 9, 2, 10])
+      for (const s of dirs){ const sp = spotAt(pt + s*d); if (sp) return sp; }
+    return null;
+  }
+  function spawnEnemyAt(type){
+    const sp = spawnSpotNear();
+    if (!sp) return false;
+    const w = Math.round(0.6*TILE), h = Math.round(1.125*TILE);
+    const e = makeEnemy(type, sp.col*TILE + Math.round((TILE - w)/2), sp.row*TILE - h);
+    e.aggro = true;   // menu spawns come out hunting, never loitering at their spawn
+    knights.push(e);
+    return true;
+  }
+  let menu = true, quitBtn = null, resumeBtn = null;
   const menuMusic = new Audio('menu.mp3'); menuMusic.loop = true;   // created at load so it prefetches
-  // main-menu map selection. sandbox1 is the current level, sandbox2 is a locked placeholder
-  const MAPS = [{ name: 'sandbox1', locked: false }, { name: 'sandbox2', locked: true }];
-  let selectedMap = 0, mapBtns = null;
+  // map selection. sandbox2 shares sandbox1's layout for now, its own look via THEMES
+  const MAPS = [{ name: 'sandbox1', locked: false }, { name: 'sandbox2', locked: false }];
+  let selectedMap = -1, mapBtns = null;   // no map picked until the player chooses one
   let godMode = false, godBtn = null;         // menu checkbox: all abilities, health refills
-  let gameOver = false, gameOverBtn = null;   // 0 hp shows the game-over screen
-  let contBtn = null, newBtn = null, codeBtn = null;
+  let gameOver = false, gameOverBtn = null, gameOverLoadBtn = null;   // 0 hp shows the game-over screen
+  let contBtn = null, newBtn = null, codeBtn = null, codeBackBtn = null;
   let codeEntry = null;                       // { text, err } while the Enter Code panel is open
   let saveData = loadSave();                  // last save, kept in sync by writeSave
   const inRect = (m, b) => !!b && m.sx >= b.x && m.sx <= b.x + b.w && m.sy >= b.y && m.sy <= b.y + b.h;
@@ -552,20 +666,98 @@
 
   // ---------- knight enemy ----------
   const KN = ASSETS.KNIGHT;
-  const KROW = { IDLE:0, WALK:1, RUN:2, JUMP:3, ATTACK:4, DIE:5, HURT:6 };
+  const KROW = { IDLE:0, WALK:1, RUN:2, JUMP:3, ATTACK:4, DIE:5, HURT:6, ATTACK2:7 };
   const KN_WALK = 0.45*U, KN_RUN = 0.9*U;
   const KN_ATTACK_DUR = SEC(0.5), KN_ATK_CD = SEC(0.35), KN_HURT = SEC(0.11);
   const KN_JMP_CD = SEC(0.25);                            // breather after a landing
   const AI_REPATH = SEC(0.2), AI_REPATH_SLOW = SEC(0.6);  // how often the knight replans / paces
   const KN_GIVEUP = SEC(5);   // stand watching an unreachable player this long, then return home
-  const KN_REACH = Math.round(1.2*TILE);   // matches the spear thrust
+  const KN_REACH = Math.round(1.2*TILE);   // lunge reach
   const KN_CX = 108;                        // body center in sheet px, so a 180 pivots in place
   // lunge: stance for 3s with the spear leveled, then a 6-tile dash for 40 damage
   const KN_LUNGE_WIND = SEC(2), KN_LUNGE_CD = SEC(5), KN_LUNGE_DIST = 6*TILE;
   const KN_LUNGE_SPD = 10, KN_LUNGE_DMG = 40, KN_STANCE = 5, KN_TINT_SPLIT = 190;
-  function freshKnights(){ return [
-    { x: 54*TILE, y: (SURF-1)*TILE - Math.round(1.125*TILE),
-      hx: 54*TILE, hy: (SURF-1)*TILE - Math.round(1.125*TILE),
+  // the sheet stores the craftpix attack loop starting mid-thrust. Play it rotated
+  // so the swing reads windup first: raise (2-4), drive (5-7), impact (8-9), settle (0-1)
+  const KN_ATK_SEQ = [2, 3, 4, 5, 6, 7, 8, 9, 0, 1];
+  // trans A: ready-up in, settle out, chained swings from guard skip the entry
+  const KN_READY = SEC(0.12), KN_SETTLE = SEC(0.07);
+  // ---------- enemy roster ----------
+  // every enemy runs on the knight-1 chassis with the same stats. Only knight 1
+  // keeps the lunge, the necromancers swap melee for the caster kit
+  const CAST_RANGE = 6*TILE;                     // necromancers fight from range
+  const SUMMON_CD = SEC(8), SUMMON_MAX = 2;      // one summon owed every 8s, 2 alive per caster
+  const ETYPES = {
+    knight1: { img: 'knight', meta: KN, cx: KN_CX, name: 'Knight 1', seq: KN_ATK_SEQ, entry: [0, 1], lunge: true },
+    knight2: { img: 'knight2' }, knight3: { img: 'knight3' },
+    troll1: { img: 'troll1' }, troll2: { img: 'troll2' }, troll3: { img: 'troll3' },
+    skel1: { img: 'skel1' }, skel2: { img: 'skel2' }, skel3: { img: 'skel3' },
+    necro1: { img: 'necro1', caster: true, summon: 'skel1', bolt: '#4db8ff' },
+    necro2: { img: 'necro2', caster: true, summon: 'skel2', bolt: '#7ef07e' },
+    necro3: { img: 'necro3', caster: true, summon: 'skel3', bolt: '#ff6a5e' },
+  };
+  for (const ek in ETYPES){
+    const t = ETYPES[ek];
+    t.key = ek;
+    if (!t.meta){ t.meta = ASSETS.ENEMIES[ek]; t.cx = t.meta.CX; }
+    t.name = t.name || t.meta.name;
+    // these packs store their attack rows windup-first, so they play in file order.
+    // The ready pose doubles as the trans-A entry telegraph
+    t.seq = t.seq || [0,1,2,3,4,5,6,7,8,9];
+    t.entry = t.entry || [t.seq[0]];
+  }
+  // weapon hitboxes measured from the sheets as vertical strips hugging the
+  // weapon, world px [dx from center, dy from feet (negative up), w, h]
+  const KN_WEAPON = {
+    knight1: [[[12, -66, 8, 64], [20, -55, 8, 32], [28, -34, 62, 10]], [[12, -63, 8, 61], [20, -46, 40, 16], [60, -47, 24, 9]], [[12, -58, 8, 56], [20, -52, 8, 15], [28, -57, 24, 13], [52, -58, 24, 9]], [[12, -64, 8, 62], [20, -54, 16, 16], [36, -56, 40, 11]], [[12, -72, 8, 70], [20, -60, 8, 22], [28, -54, 48, 11]], [[12, -74, 8, 73], [20, -70, 8, 46], [28, -50, 40, 10]], [[12, -74, 8, 72], [20, -73, 8, 53], [28, -58, 8, 20], [36, -48, 32, 11]], [[12, -74, 8, 73], [20, -72, 8, 44], [28, -52, 40, 15], [68, -44, 8, 4]], [[12, -74, 8, 73], [20, -70, 8, 42], [28, -48, 48, 14], [76, -40, 8, 2]], [[12, -74, 8, 73], [20, -63, 8, 36], [28, -39, 56, 11]]],
+    knight2: [[[12, -48, 16, 29], [28, -40, 16, 21]], [[12, -66, 24, 28]], [[12, -81, 8, 26]], [], [], [[12, -79, 8, 20]], [[12, -66, 8, 34], [20, -62, 16, 23]], [[12, -44, 24, 29], [36, -30, 8, 11]], [[12, -43, 24, 29], [36, -28, 8, 10]], [[12, -46, 24, 30], [36, -31, 8, 10]]],
+    knight3: [[[12, -71, 16, 52], [28, -47, 8, 24], [36, -53, 16, 22], [52, -52, 8, 1]], [[12, -71, 8, 42], [20, -78, 8, 47], [28, -80, 8, 40]], [[12, -75, 8, 38], [20, -70, 8, 26]], [[12, -71, 8, 14]], [[12, -86, 8, 52], [20, -69, 8, 28]], [[12, -66, 16, 42], [28, -64, 8, 33], [36, -68, 8, 26], [44, -68, 8, 14]], [[12, -68, 24, 57], [36, -30, 16, 15], [52, -28, 8, 6]], [[12, -66, 24, 53], [36, -36, 16, 17], [52, -34, 8, 8]], [[12, -68, 16, 52], [28, -40, 16, 20], [44, -41, 16, 14]], [[12, -70, 16, 53], [28, -46, 16, 26], [44, -46, 8, 15], [52, -46, 8, 7]]],
+    troll1: [[[12, -74, 16, 72], [28, -68, 16, 30], [44, -94, 16, 49], [60, -92, 8, 23]], [[12, -74, 16, 72], [28, -74, 8, 37], [36, -105, 24, 53]], [[12, -74, 8, 73], [20, -110, 8, 106], [28, -114, 8, 78], [36, -114, 16, 54], [52, -83, 8, 14]], [[12, -117, 16, 116], [28, -114, 8, 78], [36, -98, 16, 32]], [[12, -114, 8, 112], [20, -105, 8, 102], [28, -100, 8, 66], [36, -96, 8, 24]], [[12, -74, 16, 72], [28, -72, 8, 37], [36, -68, 8, 22], [44, -95, 24, 50], [68, -92, 8, 12]], [[12, -74, 16, 72], [28, -72, 8, 56], [36, -42, 32, 27], [68, -36, 8, 14]], [[12, -74, 16, 73], [28, -70, 8, 50], [36, -48, 16, 28], [52, -54, 24, 25]], [[12, -74, 16, 72], [28, -70, 8, 38], [36, -54, 16, 26], [52, -64, 8, 33], [60, -68, 16, 26], [76, -60, 8, 6]], [[12, -74, 16, 72], [28, -68, 8, 30], [36, -61, 16, 24], [52, -81, 8, 43], [60, -81, 8, 28], [68, -79, 8, 18]]],
+    troll2: [[[12, -64, 8, 20], [20, -86, 24, 43], [44, -82, 8, 18]], [[12, -97, 32, 45]], [[12, -106, 24, 50]], [[12, -112, 8, 75], [20, -104, 8, 38], [28, -86, 8, 7]], [[12, -96, 8, 62], [20, -88, 8, 12]], [[12, -66, 8, 30], [20, -88, 24, 45], [44, -84, 8, 28], [52, -82, 8, 13]], [[12, -64, 8, 50], [20, -42, 24, 30], [44, -34, 8, 20]], [[12, -62, 8, 43], [20, -44, 8, 26], [28, -53, 24, 32], [52, -36, 8, 8]], [[12, -56, 16, 29], [28, -64, 16, 36], [44, -62, 8, 26], [52, -54, 8, 15]], [[12, -59, 8, 22], [20, -68, 8, 34], [28, -75, 16, 40], [44, -74, 16, 24]]],
+    troll3: [[[12, -74, 8, 72], [20, -69, 8, 34], [28, -93, 24, 52], [52, -64, 8, 20]], [[12, -74, 8, 72], [20, -98, 8, 64], [28, -102, 16, 52], [44, -80, 8, 28], [52, -70, 8, 16]], [[12, -108, 8, 106], [20, -108, 8, 75], [28, -101, 8, 45], [36, -88, 16, 28], [52, -68, 8, 1]], [[12, -106, 8, 104], [20, -98, 8, 66], [28, -95, 8, 34], [36, -92, 8, 23], [44, -84, 8, 9]], [[12, -98, 8, 97], [20, -98, 8, 69], [28, -95, 8, 26], [36, -92, 8, 9]], [[12, -74, 8, 72], [20, -72, 8, 42], [28, -61, 8, 19], [36, -90, 24, 53]], [[12, -74, 8, 72], [20, -72, 8, 62], [28, -28, 8, 18], [36, -34, 24, 17]], [[12, -74, 8, 72], [20, -72, 8, 61], [28, -42, 8, 28], [36, -34, 8, 18], [44, -48, 16, 22], [60, -46, 8, 12]], [[12, -74, 8, 72], [20, -72, 8, 46], [28, -48, 16, 31], [44, -62, 8, 37], [52, -64, 8, 23], [60, -63, 8, 14]], [[12, -74, 8, 72], [20, -70, 8, 36], [28, -56, 16, 28], [44, -79, 8, 52], [52, -80, 8, 40], [60, -72, 8, 2]]],
+    skel1: [[[12, -62, 8, 60], [20, -53, 8, 34], [28, -54, 16, 20]], [[12, -68, 16, 38], [28, -67, 8, 20]], [[12, -76, 16, 40]], [[12, -80, 8, 38], [20, -60, 8, 10]], [[12, -74, 8, 34], [20, -59, 8, 7]], [[12, -74, 24, 40]], [[12, -74, 8, 70], [20, -68, 8, 52], [28, -37, 16, 20], [44, -34, 8, 9]], [[12, -71, 8, 68], [20, -64, 8, 49], [28, -38, 16, 20], [44, -36, 8, 9]], [[12, -68, 8, 66], [20, -62, 8, 46], [28, -44, 16, 20], [44, -40, 8, 6]], [[12, -66, 8, 64], [20, -60, 8, 43], [28, -49, 16, 21]]],
+    skel2: [[[12, -56, 8, 52], [20, -55, 8, 32], [28, -55, 8, 15], [36, -50, 8, 2]], [[12, -66, 16, 40], [28, -62, 8, 2]], [[12, -74, 16, 39]], [[12, -66, 16, 22]], [[12, -62, 16, 20]], [[12, -71, 16, 39], [28, -45, 8, 2]], [[12, -68, 8, 65], [20, -63, 8, 46], [28, -40, 16, 14]], [[12, -68, 8, 64], [20, -31, 8, 14], [28, -41, 16, 15]], [[12, -67, 8, 64], [20, -36, 8, 16], [28, -46, 16, 17]], [[12, -64, 8, 61], [20, -49, 8, 29], [28, -50, 8, 18], [36, -49, 8, 8]]],
+    skel3: [[[12, -70, 8, 56], [20, -70, 8, 38]], [[12, -76, 8, 50], [20, -48, 8, 24]], [[12, -66, 8, 41], [20, -56, 8, 20], [28, -38, 8, 5]], [[12, -66, 8, 41], [20, -59, 8, 14], [28, -48, 8, 6]], [[12, -74, 8, 51], [20, -58, 8, 13], [28, -51, 8, 5]], [[12, -76, 8, 56], [20, -54, 8, 30]], [[12, -74, 8, 58], [20, -72, 8, 47], [28, -49, 16, 21]], [[12, -74, 8, 57], [20, -70, 8, 45], [28, -52, 16, 20]], [[12, -73, 8, 57], [20, -66, 8, 38], [28, -60, 16, 20]], [[12, -72, 8, 56], [20, -66, 8, 36], [28, -65, 8, 16]]]
+  };
+  for (const ek in KN_WEAPON){
+    const t = ETYPES[ek];
+    t.weapon = KN_WEAPON[ek];
+    // reach counts only damage-window frames, or he'd stop at windup range and whiff
+    t.reachBoxes = [];
+    let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+    for (const pIdx of [4, 5, 6, 7]) for (const b of t.weapon[t.seq[pIdx]]){
+      t.reachBoxes.push(b);
+      x0 = Math.min(x0, b[0]); y0 = Math.min(y0, b[1]);
+      x1 = Math.max(x1, b[0] + b[2]); y1 = Math.max(y1, b[1] + b[3]);
+    }
+    t.reach = [x0, y0, x1 - x0, y1 - y0];   // union bbox, debug overlay only
+  }
+  function weaponRect(k, box, dir){
+    if (!box) return null;
+    const bcx = k.x + k.w/2, d = dir || k.face;
+    return { x: d > 0 ? bcx + box[0] : bcx - box[0] - box[2],
+             y: k.y + k.h + box[1], w: box[2], h: box[3] };
+  }
+  function meleeInReach(k, dir){
+    const boxes = k.T.reachBoxes;
+    if (!boxes) return false;
+    // exactly the damage geometry: any grace here would let him stop where every swing whiffs
+    const bcx = k.x + k.w/2, fy = k.y + k.h;
+    for (const b of boxes){
+      const x0 = dir > 0 ? bcx + b[0] : bcx - b[0] - b[2];
+      const y0 = fy + b[1];
+      if (P.x < x0 + b[2] && P.x + P.w > x0 && P.y < y0 + b[3] && P.y + P.h > y0) return true;
+    }
+    return false;
+  }
+  function beginAttack(k, kind){
+    k.castKind = kind;
+    if (k.wasGuard){ k.attackT = KN_ATTACK_DUR; k.didHit = false; k.frame = k.T.seq[0]; }
+    else { k.readyT = KN_READY; k.frame = 0; }
+  }
+  function makeEnemy(type, x, y){
+    return { type, T: ETYPES[type],
+      x, y, hx: x, hy: y,
       w: Math.round(0.6*TILE), h: Math.round(1.125*TILE),
       vx: 0, vy: 0, face: -1, onGround: false, hp: 20,
       anim: 'IDLE', frame: 0, ftime: 0, attackT: 0, didHit: false,
@@ -573,9 +765,49 @@
       route: null, pathT: 0, routeAge: 0, lastPN: -1, settleX: null, goalHome: false, patDir: 1, patT: 0,
       jmpCd: 0, wasGround: true, jumpFrom: null, jumpFails: 0,
       lungeCd: 0, lungeT: 0, lungeDash: 0, lungeHit: false, dashPrevX: null,
-      stranded: false, gaveUp: false, dead: false, dieT: 0, holdT: 0 }
-  ]; }
+      readyT: 0, settleT: 0, wasGuard: false,
+      castKind: 0, summonCd: 0, summoner: null,
+      stranded: false, gaveUp: false, dead: false, dieT: 0, holdT: 0 };
+  }
+  // the sandbox starts empty now, enemies come from the spawn menu (key 1)
+  function freshKnights(){ return []; }
   const knights = freshKnights();
+  const bolts = [];   // necromancer projectiles
+  function liveSummons(k){
+    let n = 0;
+    for (const e of knights) if (e.summoner === k && !e.dead) n++;
+    return n;
+  }
+  function castBolt(k){
+    const sx = k.x + k.w/2 + k.face*0.55*TILE, sy = k.y + 0.35*k.h;
+    const dx = (P.x + P.w/2) - sx, dy = (P.y + P.h/2) - sy;
+    const d = Math.hypot(dx, dy) || 1;
+    const spd = 0.9*U;
+    bolts.push({ x: sx, y: sy, vx: dx/d*spd, vy: dy/d*spd, life: SEC(3), col: k.T.bolt });
+  }
+  function summonSkeleton(k){
+    const h = Math.round(1.125*TILE), w = Math.round(0.6*TILE);
+    let x = k.x + k.w/2 + k.face*0.9*TILE - w/2;
+    x = Math.max(TILE, Math.min(LW*TILE - TILE - w, x));
+    const y = k.y + k.h - h;
+    if (bboxSolid(x, y, w, h)) x = k.x + k.w/2 - w/2;   // blocked in front: rise at the caster
+    const e = makeEnemy(k.T.summon, x, y);
+    e.summoner = k; e.aggro = true; e.face = k.face;
+    knights.push(e);
+  }
+  function updateBolts(){
+    for (let i = bolts.length - 1; i >= 0; i--){
+      const b = bolts[i];
+      b.x += b.vx; b.y += b.vy;
+      const tv = map[Math.floor(b.y/TILE)] ? map[Math.floor(b.y/TILE)][Math.floor(b.x/TILE)] : 1;
+      if (tv !== 5 && solid(Math.floor(b.x/TILE), Math.floor(b.y/TILE))){ bolts.splice(i, 1); continue; }
+      if (!P.boost && pDmgCd <= 0 && b.x > P.x && b.x < P.x + P.w && b.y > P.y && b.y < P.y + P.h){
+        damage(20); pDmgCd = P_DMG_CD;
+        bolts.splice(i, 1); continue;
+      }
+      if (--b.life <= 0) bolts.splice(i, 1);
+    }
+  }
   let pDmgCd = 0;   // player damage cooldown so hits land once, not every frame
   let pLastNode = -1;   // the player's last grounded node, stable while they hop
   let debugAI = false;
@@ -649,9 +881,16 @@
     }
     const cx2 = k.x + k.w/2;
     if (ranged && (cx2 - anchorX) * k.patDir > 2.5*TILE) k.patDir *= -1;
-    const ahead = Math.floor((cx2 + k.patDir*(k.w/2 + 10))/TILE);
     const fr2 = Math.floor((k.y + k.h)/TILE);
-    if (solid(ahead, fr2-1) || solid(ahead, fr2-2) || !solid(ahead, fr2)){ k.patDir *= -1; k.patT = AI_REPATH_SLOW; }
+    const blocked = dir => {
+      const ahead = Math.floor((cx2 + dir*(k.w/2 + 10))/TILE);
+      return solid(ahead, fr2-1) || solid(ahead, fr2-2) || !solid(ahead, fr2);
+    };
+    if (blocked(k.patDir)){
+      // pinned on both sides: stand still instead of mirroring every tick
+      if (blocked(-k.patDir)){ k.vx = 0; return; }
+      k.patDir *= -1; k.patT = AI_REPATH_SLOW;
+    }
     k.vx = k.patDir * KN_WALK * 0.8;
     k.face = k.patDir;
   }
@@ -678,6 +917,7 @@
       if (sameScreen && (k.aggro || !k.gaveUp || routeTo(k, P).ok)) k.aggro = true;
       else if (!sameBand) k.aggro = false;
       if (k.atkCd > 0) k.atkCd--;
+      if (k.summonCd > 0) k.summonCd--;
       if (k.lungeCd > 0 && k.lungeT <= 0 && k.lungeDash <= 0) k.lungeCd--;
       // time spent aggro with no way to reach the player, drives the give-up-and-go-home
       if (!k.aggro || k.attackT > 0 || k.lungeT > 0 || k.lungeDash > 0 || (k.route && !k.goalHome)) k.holdT = 0;
@@ -716,15 +956,30 @@
         k.hurtT--;
         k.vx = 0;
         k.frame = Math.min(KN.FRAMES - 1, Math.floor((KN_HURT - k.hurtT)/KN_HURT*KN.FRAMES));
+      } else if (k.readyT > 0){
+        // ready-up telegraph, committed like the swing
+        k.readyT--;
+        k.vx = 0;
+        if (k.readyT === 0){ k.attackT = KN_ATTACK_DUR; k.didHit = false; k.frame = k.T.seq[0]; }
       } else if (k.attackT > 0){
         k.attackT--;
         if (k.attackT === 0) k.atkCd = KN_ATK_CD;
         k.vx = 0;
-        k.frame = Math.min(KN.FRAMES - 1, Math.floor((KN_ATTACK_DUR - k.attackT)/KN_ATTACK_DUR*KN.FRAMES));
-        // the swing connects on its middle frames
-        if (!k.didHit && k.frame >= 4 && k.frame <= 7){
-          const swing = { x: k.face > 0 ? k.x + k.w : k.x - KN_REACH, y: k.y, w: KN_REACH, h: k.h };
-          if (!P.boost && overlaps(swing, P)){ damage(20); k.didHit = true; pDmgCd = P_DMG_CD; }
+        const prog = Math.min(KN.FRAMES - 1, Math.floor((KN_ATTACK_DUR - k.attackT)/KN_ATTACK_DUR*KN.FRAMES));
+        k.frame = k.T.seq[prog];
+        if (k.castKind){
+          // the bolt fires on its launch frame, the summon as it rises
+          if (!k.didHit && prog >= (k.castKind === 2 ? 7 : 5)){
+            k.didHit = true;
+            if (k.castKind === 2) summonSkeleton(k); else castBolt(k);
+          }
+        } else if (!k.didHit && prog >= 4 && prog <= 7){
+          // this frame's weapon strips do the hitting
+          if (!P.boost && k.T.weapon){
+            for (const b of k.T.weapon[k.frame] || []){
+              if (overlaps(weaponRect(k, b), P)){ damage(20); k.didHit = true; pDmgCd = P_DMG_CD; break; }
+            }
+          }
         }
       } else {
         const dist = Math.abs(dxp);
@@ -738,14 +993,23 @@
           const step = pc >= lc ? 1 : -1;
           for (let c = lc + step; c !== pc + step; c += step) if (!solid(c, lf)){ lungeClear = false; break; }
         }
-        if (k.aggro && k.lungeCd <= 0 && lungeClear){
+        if (k.T.lunge && k.aggro && k.lungeCd <= 0 && lungeClear){
           k.lungeT = KN_LUNGE_WIND;
           k.lungeCd = KN_LUNGE_CD;
           k.face = dxp < 0 ? -1 : 1;
           k.vx = 0;
-        } else if (k.aggro && dist < 0.85*TILE + KN_REACH/2 && level){
+        } else if (k.T.caster && k.aggro && level && dist <= CAST_RANGE){
+          // casters hold ground, a summon when one is owed, else a bolt
+          k.face = dxp < 0 ? -1 : 1;
+          k.vx = 0;
+          if (k.atkCd <= 0){
+            const kind = (k.summonCd <= 0 && liveSummons(k) < SUMMON_MAX) ? 2 : 1;
+            if (kind === 2) k.summonCd = SUMMON_CD;
+            beginAttack(k, kind);
+          }
+        } else if (!k.T.caster && k.aggro && meleeInReach(k, dxp < 0 ? -1 : 1)){
           if (Math.abs(dxp) > 8) k.face = dxp < 0 ? -1 : 1;
-          if (k.atkCd <= 0){ k.attackT = KN_ATTACK_DUR; k.didHit = false; k.frame = 0; }
+          if (k.atkCd <= 0) beginAttack(k, 0);
           else k.vx = 0;   // catching his breath between swings
         } else if (k.settleX != null){
           // finish a landing by stepping onto the middle of the block
@@ -794,7 +1058,7 @@
             } else {
               // can't reach the player and can't get home either: wander aimlessly
               pace(k, k.x + k.w/2, false);
-              want = 'WALK';
+              want = k.vx === 0 ? 'IDLE' : 'WALK';
             }
           } else if (r.drop){
             const dc = r.drop.tx*TILE + TILE/2;
@@ -823,7 +1087,7 @@
               want = k.vx === 0 ? 'IDLE' : (k.running ? 'RUN' : 'WALK');
             }
           } else if (Math.abs(gdx) < (k.goalHome ? TILE : 0.4*TILE)){
-            if (k.goalHome){ pace(k, k.hx + k.w/2, true); want = 'WALK'; }
+            if (k.goalHome){ pace(k, k.hx + k.w/2, true); want = k.vx === 0 ? 'IDLE' : 'WALK'; }
             else k.vx = 0;   // right under or over the player, hold steady
           } else {
             const spd = (k.goalHome && !k.aggro) ? KN_WALK : gait(k, Math.abs(gdx));
@@ -884,14 +1148,31 @@
         P.vy = Math.min(P.vy, -2.2*U);
       }
       if (k.lungeT > 0 || k.lungeDash > 0){ k.anim = 'ATTACK'; k.frame = KN_STANCE; }
-      else if (k.attackT > 0){ k.anim = 'ATTACK'; }
+      else if (k.attackT > 0){ k.anim = k.castKind === 2 ? 'ATTACK2' : 'ATTACK'; }
       else if (k.hurtT > 0){ k.anim = 'HURT'; }
+      else if (k.readyT > 0){
+        k.anim = k.castKind === 2 ? 'ATTACK2' : 'ATTACK';
+        const es = k.T.entry;
+        k.frame = es[Math.min(es.length - 1, Math.floor((KN_READY - k.readyT)/KN_READY*es.length))];
+      }
+      else if (k.atkCd > 0 && k.aggro && k.onGround && k.vx === 0){
+        // guard hold between chained swings
+        k.anim = 'ATTACK'; k.frame = k.T.seq[KN.FRAMES - 1];
+        k.wasGuard = true;
+      }
       else {
-        if (want !== k.anim){ k.anim = want; k.frame = 0; k.ftime = 0; }
-        if (k.anim === 'IDLE') k.frame = 0;
-        else if (k.anim === 'JUMP') k.frame = k.vy < -1 ? 3 : k.vy > 1 ? 6 : 4;
-        else { const sp2 = k.anim === 'RUN' ? 3 : 4;
-          k.ftime++; if (k.ftime >= sp2){ k.ftime = 0; k.frame = (k.frame + 1) % KN.FRAMES; } }
+        // leaving guard while standing: trans-A settle
+        if (k.wasGuard){ k.wasGuard = false; if (k.vx === 0 && k.onGround) k.settleT = KN_SETTLE; }
+        if (k.settleT > 0 && k.vx === 0){
+          k.settleT--; k.anim = 'ATTACK'; k.frame = 0;
+        } else {
+          k.settleT = 0;
+          if (want !== k.anim){ k.anim = want; k.frame = 0; k.ftime = 0; }
+          if (k.anim === 'IDLE') k.frame = 0;
+          else if (k.anim === 'JUMP') k.frame = k.vy < -1 ? 3 : k.vy > 1 ? 6 : 4;
+          else { const sp2 = k.anim === 'RUN' ? 3 : 4;
+            k.ftime++; if (k.ftime >= sp2){ k.ftime = 0; k.frame = (k.frame + 1) % KN.FRAMES; } }
+        }
       }
     }
   }
@@ -964,20 +1245,35 @@
     let ix = 0;
     if (keys['KeyA'] || keys['ArrowLeft'])  ix -= 1;
     if (keys['KeyD'] || keys['ArrowRight']) ix += 1;
+    if (keys['KeyS'] && P.onGround && !P.boost && P.dashT <= 0){
+      if (!P.crouch){ P.crouch = true; P.y += STAND_H - CROUCH_H; P.h = CROUCH_H; }
+    } else if (P.crouch) standFromCrouch();
+    P.crouchT = Math.max(0, Math.min(1, P.crouchT + (P.crouch ? 1 : -1)/SEC(0.05)));
     if (P.boost){
       if (ix !== 0){ P.boostDir = ix; P.boostIdle = 0; }        // steerable, but always full speed
       else if (++P.boostIdle >= BOOST_IDLE) P.boost = false;    // let go of A/D for 0.5s -> stop
       if (P.boost){ P.vx = P.boostDir * BOOST_SPD; if (P.attackT <= 0) P.face = P.boostDir; }
     } else if (ix !== 0){
+      const spdCap = P.crouch ? CROUCH_SPD : WALK_SPD;
       P.vx += ix * ACCEL;
-      P.vx = Math.max(-WALK_SPD, Math.min(WALK_SPD, P.vx));
+      P.vx = Math.max(-spdCap, Math.min(spdCap, P.vx));
       if (P.attackT <= 0) P.face = ix;
     } else {
       if (Math.abs(P.vx) < FRIC) P.vx = 0; else P.vx -= Math.sign(P.vx)*FRIC;
     }
 
+    // dash overrides steering
+    if (P.dashT > 0){
+      P.dashT--;
+      P.vx = P.dashDir * DASH_SPD;
+      if (P.attackT <= 0) P.face = P.dashDir;
+    }
+    if (P.dashCd > 0) P.dashCd--;
+    if (P.dashFx > 0) P.dashFx--;
     const fastFall = keys['KeyS'] && !P.onGround;   // hold S in the air to drop faster
-    if (P.vy < 0){
+    if (P.dashT > 0){
+      P.vy = 0;   // the dash holds altitude, gravity waits
+    } else if (P.vy < 0){
       P.vy += GRAV * (fastFall ? 1.5 : 1);
       if (!keys['Space']) P.vy *= JUMP_CUT;   // analog jump height
     } else {
@@ -986,6 +1282,7 @@
       if (P.vy > cap) P.vy = cap;             // capped low so it never runs away, higher with S
     }
     moveSwept(P, P.vx, 0);
+    if (P.dashT > 0 && P.vx === 0) P.dashT = 0;   // a wall ends the dash
     const vyPre = P.vy;                 // upward speed before the move, to detect a ceiling hit
     moveSwept(P, 0, P.vy);
     P.onGround = grounded(P);
@@ -999,7 +1296,7 @@
     // charge it by running BOOST_TILES straight tiles, grounded, no jump/fall/damage
     if (P.canBoost && !P.boost){
       const btx = Math.floor((P.x + P.w/2)/TILE);
-      if (P.onGround && ix !== 0 && P.vx !== 0 && P.hurtT <= 0 && !P.charging){
+      if (P.onGround && ix !== 0 && P.vx !== 0 && P.hurtT <= 0 && !P.charging && !P.crouch){
         if (ix !== P.runDir){ P.runDir = ix; P.runStartTile = btx; }
         if ((btx - P.runStartTile) * ix >= BOOST_TILES){
           P.boost = true; P.boostDir = ix; P.boostIdle = 0;
@@ -1008,9 +1305,9 @@
       } else { P.runDir = 0; P.runStartTile = btx; }
     }
     if (P.jumpBuf>0) P.jumpBuf--;
-    if (P.jumpBuf>0 && P.coyote>0){ P.vy = -JUMP_V; P.onGround=false; P.coyote=0; P.jumpBuf=0; playSfx('jump', 0.1); }
+    if (P.jumpBuf>0 && P.coyote>0 && standFromCrouch()){ P.dashT = 0; P.vy = -JUMP_V; P.onGround=false; P.coyote=0; P.jumpBuf=0; playSfx('jump', 0.1); }
     // double jump: a second Space press in the air, once per airtime, after the pickup
-    else if (P.jumpBuf>0 && P.canDouble && !P.usedDouble && !P.onGround){ P.vy = -JUMP_V; P.usedDouble = true; P.jumpBuf = 0; playSfx('jump', 0.1); }
+    else if (P.jumpBuf>0 && P.canDouble && !P.usedDouble && !P.onGround && standFromCrouch()){ P.dashT = 0; P.vy = -JUMP_V; P.usedDouble = true; P.jumpBuf = 0; playSfx('jump', 0.1); }
     if (P.onGround) P.usedDouble = false;
 
     if (P.x < 0){ P.x=0; P.vx=0; }
@@ -1020,6 +1317,7 @@
     if (P.boost){ boostSndStart(); boostSndUpdate(); } else boostSndStop();
 
     updateKnights();
+    updateBolts();
     updateBombs();
 
     // enemies are solid: push the player out along the shallow axis, but never
@@ -1040,7 +1338,6 @@
       }
     }
 
-    // grab ability pickups
     for (const pk of pickups){
       if (pk.taken) continue;
       if (P.x < pk.x + pk.w && P.x + P.w > pk.x &&
@@ -1248,25 +1545,99 @@
     g.beginPath(); g.ellipse(180, VIEW_H + 40, 340, 220, 0, 0, Math.PI*2); g.fill();
     hillPine(90, 505, 30); hillPine(230, 490, 36); hillPine(340, 545, 26);
   })();
+  // sandbox2 backdrop, painted once like BG. Only the rain animates
+  const BG_NIGHT = document.createElement('canvas');
+  BG_NIGHT.width = VIEW_W; BG_NIGHT.height = VIEW_H;
+  (function paintBGNight(){
+    const g = BG_NIGHT.getContext('2d');
+    const grad = g.createLinearGradient(0, 0, 0, VIEW_H);
+    grad.addColorStop(0, '#0e1014'); grad.addColorStop(1, '#282e32');
+    g.fillStyle = grad; g.fillRect(0, 0, VIEW_W, VIEW_H);
+    // hazy moon
+    const mg = g.createRadialGradient(160, 90, 6, 160, 90, 80);
+    mg.addColorStop(0, 'rgba(200,206,214,0.45)'); mg.addColorStop(0.45, 'rgba(200,206,214,0.14)'); mg.addColorStop(1, 'rgba(200,206,214,0)');
+    g.fillStyle = mg; g.fillRect(50, -20, 220, 220);
+    g.fillStyle = '#c8ced6';
+    g.beginPath(); g.arc(160, 90, 30, 0, Math.PI*2); g.fill();
+    // hills
+    g.fillStyle = '#141a1c';
+    g.beginPath(); g.ellipse(180, 642, 380, 210, 0, 0, Math.PI*2); g.fill();
+    g.beginPath(); g.ellipse(800, 677, 380, 215, 0, 0, Math.PI*2); g.fill();
+    // chapel silhouette on the far hill
+    g.fillStyle = '#0e1214';
+    g.fillRect(610, 435, 90, 70);
+    g.beginPath(); g.moveTo(604, 435); g.lineTo(706, 435); g.lineTo(655, 405); g.closePath(); g.fill();
+    g.fillRect(644, 365, 22, 70);
+    g.beginPath(); g.moveTo(640, 365); g.lineTo(670, 365); g.lineTo(655, 330); g.closePath(); g.fill();
+    // gravestones
+    g.fillStyle = '#1e2626';
+    for (const gx of [200, 300, 770, 860]){
+      g.fillRect(gx, 519, 22, 26);
+      g.beginPath(); g.ellipse(gx + 11, 519, 11, 9, 0, 0, Math.PI*2); g.fill();
+    }
+    // fog bands, soft radial blobs
+    function fogBand(cy, ry, alpha){
+      for (const c of [[VIEW_W*0.28, VIEW_W*0.55], [VIEW_W*0.78, VIEW_W*0.55]]){
+        g.save();
+        g.translate(c[0], cy); g.scale(c[1]/100, ry/100);
+        const fg = g.createRadialGradient(0, 0, 10, 0, 0, 100);
+        fg.addColorStop(0, 'rgba(190,200,210,' + alpha + ')');
+        fg.addColorStop(1, 'rgba(190,200,210,0)');
+        g.fillStyle = fg;
+        g.beginPath(); g.arc(0, 0, 100, 0, Math.PI*2); g.fill();
+        g.restore();
+      }
+    }
+    fogBand(500, 74, 0.30);
+    fogBand(592, 66, 0.42);
+  })();
+  // per-map theme: tiles, tree colors (the crown bakes lazily per theme), backdrop, weather
+  const THEMES = [
+    { grass: IMG.grass,  dirt: IMG.dirt,  bark: IMG.bark,  leaf: IMG.leaf,  bg: BG,       rain: false, crown: null },
+    { grass: IMG.ngrass, dirt: IMG.ndirt, bark: IMG.nbark, leaf: IMG.nleaf, bg: BG_NIGHT, rain: true,  crown: null },
+  ];
+  let theme = THEMES[0];
+  // storm rain, advanced on real time like the star field so speed ignores refresh rate
+  const rain = [];
+  for (let i = 0; i < 90; i++)
+    rain.push({ x: Math.random()*VIEW_W, y: Math.random()*VIEW_H, s: 380 + Math.random()*260 });
+  let rainLastT = 0;
+  function drawRain(){
+    const t = performance.now();
+    const dt = rainLastT ? Math.min(80, t - rainLastT) : 7;
+    rainLastT = t;
+    ctx.strokeStyle = 'rgba(150,165,185,0.32)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (const r of rain){
+      r.y += r.s*dt/1000; r.x -= r.s*0.16*dt/1000;
+      if (r.y > VIEW_H + 6){ r.y -= VIEW_H + 26; r.x = Math.random()*VIEW_W; }
+      if (r.x < -6) r.x += VIEW_W + 12;
+      ctx.moveTo(r.x, r.y);
+      ctx.lineTo(r.x - 3, r.y + 13);
+    }
+    ctx.stroke();
+  }
   function drawBackground(){
     const off = ((cam.x % VIEW_W) + VIEW_W) % VIEW_W;
-    ctx.drawImage(BG, -off, 0);
-    if (off) ctx.drawImage(BG, VIEW_W - off, 0);
+    ctx.drawImage(theme.bg, -off, 0);
+    if (off) ctx.drawImage(theme.bg, VIEW_W - off, 0);
+    if (theme.rain && camRegion !== 2) drawRain();   // no rain down in the underground band
   }
-  // cloud crown, drawn in front of the player and arrows, pinned into the trunk top
-  let CROWN = null;
+  // cloud crown, drawn in front of the player and arrows, pinned into the trunk top.
+  // Baked once per theme (theme.crown) from that theme's leaf tile.
   const CROWN_LOBES = [[160,64,58],[95,112,56],[225,112,56],[50,186,50],[160,172,72],[270,186,50],
                        [105,205,55],[215,205,55]];
   const CROWN_SCALE = 1.35;
   const CROWN_W = Math.round(5*TILE*CROWN_SCALE), CROWN_H = Math.round(4*TILE*CROWN_SCALE);
   const CROWN_AX = Math.round(160*CROWN_SCALE), CROWN_AY = Math.round(244*CROWN_SCALE);
   function crownCanvas(){
-    if (CROWN) return CROWN;
+    if (theme.crown) return theme.crown;
     const cv = document.createElement('canvas');
     cv.width = CROWN_W; cv.height = CROWN_H;
     const g = cv.getContext('2d');
     for (let y = 0; y < cv.height; y += TILE)
-      for (let x = 0; x < cv.width; x += TILE) g.drawImage(IMG.leaf, x, y);
+      for (let x = 0; x < cv.width; x += TILE) g.drawImage(theme.leaf, x, y);
     g.globalCompositeOperation = 'destination-in';
     g.beginPath();
     for (const c of CROWN_LOBES){
@@ -1279,24 +1650,26 @@
     sh.addColorStop(0.45, 'rgba(10,25,12,0)'); sh.addColorStop(1, 'rgba(10,25,12,0.3)');
     g.fillStyle = sh; g.fillRect(0, 0, cv.width, cv.height);
     g.globalCompositeOperation = 'source-over';
-    return (CROWN = cv);
+    return (theme.crown = cv);
   }
   function drawKnights(){
     ctx.imageSmoothingEnabled = true;
     for (const k of knights){
       const sx = Math.round(k.x + k.w/2 - cam.x);
-      const fy = Math.round(k.y + k.h - cam.y);
+      // +2 seats the feet into the grass, never a gap
+      const fy = Math.round(k.y + k.h - cam.y) + 2;
       ctx.save();
       ctx.translate(sx, fy);
       if (k.face < 0) ctx.scale(-1, 1);
       if (k.dead) ctx.globalAlpha = Math.max(0, Math.min(1, (140 - k.dieT) / 40));
+      const M = k.T.meta;
       if (k.lungeT > 0 || k.lungeDash > 0){
         const prog = k.lungeDash > 0 ? 1 : 1 - k.lungeT/KN_LUNGE_WIND;
         ctx.drawImage(lungeFrame(Math.round(prog*10)), 0, 0, KN.FW, KN.FH,
                       -KN_CX/SS, -KN.anchorY/SS, KN.FW/SS, KN.FH/SS);
       } else {
-        ctx.drawImage(IMG.knight, k.frame*KN.FW, KROW[k.anim]*KN.FH, KN.FW, KN.FH,
-                      -KN_CX/SS, -KN.anchorY/SS, KN.FW/SS, KN.FH/SS);
+        ctx.drawImage(IMG[k.T.img], k.frame*M.FW, KROW[k.anim]*M.FH, M.FW, M.FH,
+                      -k.T.cx/SS, -M.anchorY/SS, M.FW/SS, M.FH/SS);
       }
       ctx.restore();
       ctx.globalAlpha = 1;
@@ -1325,6 +1698,17 @@
     ctx.shadowBlur = 0; ctx.globalAlpha = 1; ctx.lineWidth = 1; ctx.lineCap = 'butt';
   }
   function drawKFx(){ drawStreaks(kFx, q => spearTip(q.k), '#ff6a55', 'rgba(255,60,40,0.8)', 1); }
+  function drawBolts(){
+    for (const b of bolts){
+      ctx.save();
+      ctx.shadowColor = b.col; ctx.shadowBlur = 12;
+      ctx.fillStyle = b.col;
+      ctx.beginPath(); ctx.arc(b.x - cam.x, b.y - cam.y, 5, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = '#ffffff';
+      ctx.beginPath(); ctx.arc(b.x - cam.x, b.y - cam.y, 2.4, 0, Math.PI*2); ctx.fill();
+      ctx.restore();
+    }
+  }
   function drawCrowns(){
     const cv = crownCanvas();
     for (const t of TREE_CROWNS){
@@ -1340,7 +1724,7 @@
       const v = (ty>=0 && ty<LH && tx>=0 && tx<LW) ? map[ty][tx] : 0;
       if (!v || v >= 3) continue;   // the crown draws the leaf cells
       const sx = tx*TILE - cam.x, sy = ty*TILE - cam.y;
-      ctx.drawImage(v === 2 ? IMG.bark : (!solid(tx,ty-1) ? IMG.grass : IMG.dirt), sx, sy);
+      ctx.drawImage(v === 2 ? theme.bark : (!solid(tx,ty-1) ? theme.grass : theme.dirt), sx, sy);
     }
   }
   function drawPickups(){
@@ -1380,18 +1764,24 @@
   }
   // muted text with an accent keycap, like the bottom bar hints
   function keycapLine(cx2, ly, verb, key, tail){
+    const isMouse = key === 'M-L';   // drawn as a mouse pictogram, not a keycap
     const vw = ctx.measureText(verb + ' ').width;
-    const kw = ctx.measureText(key).width + 4*U;
+    const kw = isMouse ? 5.5*U : ctx.measureText(key).width + 4*U;
     const aw = ctx.measureText(' ' + tail).width;
     let lx = cx2 - (vw + kw + aw)/2;
     ctx.textAlign = 'left';
     ctx.fillStyle = '#8a9099';
     ctx.fillText(verb + ' ', lx, ly); lx += vw;
-    ctx.strokeStyle = '#60e0d0';
-    roundRect(lx, ly - 3*U, kw, 6*U, U); ctx.stroke();
-    ctx.textAlign = 'center';
-    ctx.fillStyle = '#60e0d0';
-    ctx.fillText(key, lx + kw/2, ly); lx += kw;
+    if (isMouse){
+      mouseIcon(lx + 0.25*U, ly - 3.4*U, 5*U, 6.8*U);
+    } else {
+      ctx.strokeStyle = '#60e0d0';
+      roundRect(lx, ly - 3*U, kw, 6*U, U); ctx.stroke();
+      ctx.textAlign = 'center';
+      ctx.fillStyle = '#60e0d0';
+      ctx.fillText(key, lx + kw/2, ly);
+    }
+    lx += kw;
     ctx.textAlign = 'left';
     ctx.fillStyle = '#8a9099';
     ctx.fillText(' ' + tail, lx, ly);
@@ -1435,13 +1825,37 @@
   }
   const MONO = 'px ui-monospace, Menlo, Consolas, monospace';
   // expanded pause menu: keybinds as keycaps, abilities added as picked up, resume + quit
+  // mouse pictogram, left button lit
+  function mouseIcon(x, y, w, h){
+    const bh = h*0.44;   // the buttons end at the grip
+    ctx.save();
+    roundRect(x, y, w, h, w*0.48); ctx.clip();
+    ctx.fillStyle = '#60e0d0';
+    ctx.fillRect(x, y, w/2, bh);   // the left button, lit
+    ctx.restore();
+    ctx.strokeStyle = '#60e0d0'; ctx.lineWidth = 1;
+    roundRect(x, y, w, h, w*0.48); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(x + w/2, y); ctx.lineTo(x + w/2, y + bh);
+    ctx.moveTo(x, y + bh); ctx.lineTo(x + w, y + bh);
+    ctx.stroke();
+  }
   // keycap: teal border and label only (no filled key face)
   function keycap(x, y, w, h, label){
     ctx.strokeStyle = '#60e0d0'; ctx.lineWidth = 1; roundRect(x, y, w, h, 2*U); ctx.stroke();
     ctx.fillStyle = '#c4f5ec'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.fillText(label, x + w/2, y + h/2 + 0.5);
   }
-  function menuButton(x, y, w, h, label, primary){
+  function menuButton(x, y, w, h, label, primary, disabled){
+    if (disabled){
+      ctx.fillStyle = 'rgba(60,66,76,0.22)';
+      roundRect(x, y, w, h, 2*U); ctx.fill();
+      ctx.strokeStyle = '#3c4b4b'; ctx.lineWidth = 1.5; roundRect(x, y, w, h, 2*U); ctx.stroke();
+      ctx.fillStyle = '#5f6d70';
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.font = 'bold ' + Math.round(4.2*U) + MONO;
+      ctx.fillText(label, x + w/2, y + h/2);
+      return;
+    }
     const hov = inRect(mouse, { x, y, w, h });
     ctx.fillStyle = primary ? (hov ? 'rgba(96,224,208,0.5)' : 'rgba(96,224,208,0.26)')
                             : (hov ? 'rgba(96,224,208,0.2)' : 'rgba(24,120,120,0.22)');
@@ -1458,14 +1872,18 @@
     const rows = [
       { label:'Move', keys:['A','D'] },
       { label:'Jump', keys:['Space'] },
-      { label:'Aim / Shoot', keys:['L-Click'] },
+      { label:'Crouch', keys:['S'] },
+      { label:'Dash', keys:['Shift'] },
+      { label:'Spawn enemy', keys:['1'] },
+      { label:'Enemy info', keys:['2'] },
+      { label:'Aim / Shoot', keys:['M-L'] },
     ];
-    if (P.canCharge) rows.push({ label:'Power shot', keys:['Hold L-Click'] });
-    if (P.canBomb)   rows.push({ label:'Bomb', keys:['Shift'] });
+    if (P.canCharge) rows.push({ label:'Power shot', prefix:'Hold', keys:['M-L'] });
+    if (P.canBomb)   rows.push({ label:'Bomb', keys:['Q'] });
     const rowFont = Math.round(3.7*U) + MONO, keyFont = 'bold ' + Math.round(3.5*U) + MONO;
     const keyPadX = 3*U, keyH = 7.5*U, sepW = 3.4*U, rowH = 10*U, sideM = 9*U, midGap = 12*U;
     const headH = 16*U, footH = 34*U;
-    const keyW = k => { ctx.font = keyFont; return Math.max(7.5*U, ctx.measureText(k).width + 2*keyPadX); };
+    const keyW = k => { if (k === 'M-L') return 5.5*U; ctx.font = keyFont; return Math.max(7.5*U, ctx.measureText(k).width + 2*keyPadX); };
     function groupW(r){
       let w = 0;
       if (r.prefix){ ctx.font = rowFont; w += ctx.measureText(r.prefix + ' ').width; }
@@ -1492,7 +1910,10 @@
       if (r.prefix){ ctx.font = rowFont; ctx.fillStyle = '#8a9099'; ctx.textAlign = 'left'; ctx.fillText(r.prefix + ' ', gx, ly); gx += ctx.measureText(r.prefix + ' ').width; }
       for (let i = 0; i < r.keys.length; i++){
         if (i) gx += sepW;
-        const w = keyW(r.keys[i]); keycap(gx, ly - keyH/2, w, keyH, r.keys[i]); gx += w;
+        const w = keyW(r.keys[i]);
+        if (r.keys[i] === 'M-L') mouseIcon(gx + 0.25*U, ly - keyH/2, 5*U, keyH);
+        else keycap(gx, ly - keyH/2, w, keyH, r.keys[i]);
+        gx += w;
       }
       if (r.suffix){ ctx.font = rowFont; ctx.fillStyle = '#8a9099'; ctx.textAlign = 'left'; ctx.textBaseline = 'middle'; ctx.fillText(' ' + r.suffix, gx, ly); }
       ly += rowH;
@@ -1502,6 +1923,32 @@
     resumeBtn = { x: bx, y: ry, w: bw, h: rbh };
     const qbh = 9.5*U, qy = ry + rbh + 4*U; menuButton(bx, qy, bw, qbh, 'Quit to Main Menu', false);
     quitBtn = { x: bx, y: qy, w: bw, h: qbh };
+    ctx.textAlign = 'start'; ctx.textBaseline = 'alphabetic';
+  }
+  function drawSpawnMenu(){
+    spawnBtns = null; spawnPanel = null;
+    if (!spawnMenu) return;
+    ctx.fillStyle = 'rgba(8,10,14,0.82)';
+    ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    const cols = 3;
+    const bw = 52*U, bh = 10*U, gapX = 4*U, gapY = 3.4*U;
+    const rows = Math.ceil(SPAWN_LIST.length / cols);
+    const panelW = cols*bw + (cols - 1)*gapX + 12*U;
+    const panelH = 14*U + rows*bh + (rows - 1)*gapY + 8*U;
+    const px = VIEW_W/2 - panelW/2, py = VIEW_H/2 - panelH/2;
+    spawnPanel = { x: px, y: py, w: panelW, h: panelH };
+    ctx.fillStyle = 'rgba(14,16,19,0.97)'; roundRect(px, py, panelW, panelH, 3*U); ctx.fill();
+    ctx.strokeStyle = '#60e0d0'; ctx.lineWidth = 1.5; roundRect(px, py, panelW, panelH, 3*U); ctx.stroke();
+    ctx.fillStyle = '#e8ecf0'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.font = 'bold ' + Math.round(5.5*U) + MONO;
+    ctx.fillText('Spawn Enemy', VIEW_W/2, py + 7*U);
+    spawnBtns = [];
+    for (let i = 0; i < SPAWN_LIST.length; i++){
+      const bx = px + 6*U + (i % cols)*(bw + gapX);
+      const by = py + 12*U + Math.floor(i / cols)*(bh + gapY);
+      menuButton(bx, by, bw, bh, ETYPES[SPAWN_LIST[i]].name, false);
+      spawnBtns.push({ x: bx, y: by, w: bw, h: bh, type: SPAWN_LIST[i] });
+    }
     ctx.textAlign = 'start'; ctx.textBaseline = 'alphabetic';
   }
   // dark twinkling-star backdrop for the menu and pause, animates while paused via performance.now()
@@ -1559,7 +2006,7 @@
   }
   function drawMenuBg(){ drawStarField(); }
   function drawMenu(){
-    playBtn = null; mapBtns = null; godBtn = null; contBtn = null; newBtn = null; codeBtn = null;
+    mapBtns = null; godBtn = null; contBtn = null; newBtn = null; codeBtn = null; codeBackBtn = null;
     if (!menu) return;
     drawMenuBg();   // dark twinkling-star backdrop
     const cx2 = VIEW_W/2, cy2 = VIEW_H/2;
@@ -1568,7 +2015,6 @@
     ctx.fillStyle = '#60e0d0'; ctx.font = 'bold ' + Math.round(13*U) + MONO;
     ctx.fillText('ARROWVANIA', cx2, cy2 - 24*U);
     ctx.restore();
-    // map selection: sandbox1 is playable, sandbox2 sits grayed out until it exists
     const mw = 30*U, mh = 9*U, mgap = 4*U;
     const mx0 = cx2 - mw - mgap/2, my0 = cy2 - 9*U;
     mapBtns = [];
@@ -1594,8 +2040,8 @@
       ctx.fillText(m.name, b.x + b.w/2, b.y + b.h/2);
     }
     if (codeEntry){
-      // Enter Code panel: type the code, Enter loads it, Esc backs out
-      const pw = 62*U, ph = 27*U, px2 = cx2 - pw/2, py2 = cy2 + 3*U;
+      // Enter Code panel: type the code, Enter loads it, Back or Esc backs out
+      const pw = 62*U, ph = 33*U, px2 = cx2 - pw/2, py2 = cy2 + 3*U;
       ctx.fillStyle = 'rgba(14,16,19,0.97)'; ctx.lineWidth = 1.5;
       roundRect(px2, py2, pw, ph, 3*U); ctx.fill();
       ctx.strokeStyle = '#60e0d0'; roundRect(px2, py2, pw, ph, 3*U); ctx.stroke();
@@ -1610,25 +2056,24 @@
       ctx.fillStyle = '#d9fff8'; ctx.font = 'bold ' + Math.round(5*U) + MONO;
       ctx.fillText(shown + (raw.length < 8 ? caret : ''), cx2, iby + ibh/2);
       ctx.font = Math.round(3.2*U) + MONO;
-      if (codeEntry.err){ ctx.fillStyle = '#ff6a55'; ctx.fillText('invalid code', cx2, py2 + 22.5*U); }
-      else { ctx.fillStyle = '#8a9099'; ctx.fillText('Enter to load, Esc to cancel', cx2, py2 + 22.5*U); }
+      if (codeEntry.err){ ctx.fillStyle = '#ff6a55'; ctx.fillText('invalid code', cx2, py2 + 20.5*U); }
+      const cbw = 30*U, cbh = 8.5*U;
+      menuButton(cx2 - cbw/2, py2 + 23*U, cbw, cbh, 'Back', false);
+      codeBackBtn = { x: cx2 - cbw/2, y: py2 + 23*U, w: cbw, h: cbh };
       ctx.lineWidth = 1;
       ctx.textAlign = 'start'; ctx.textBaseline = 'alphabetic';
       return;
     }
-    // buttons: Continue when this map has a save, then New Game, then Enter Code
+    // Continue rides the save and loads its map. New Game needs a map picked
     const bw = 46*U, bx = cx2 - bw/2;
     let yy = cy2 + 4*U;
-    const hasSave = !!(saveData && saveData.map === selectedMap && !MAPS[selectedMap].locked);
-    if (hasSave){
-      menuButton(bx, yy, bw, 11*U, 'Continue', true);
-      contBtn = { x: bx, y: yy, w: bw, h: 11*U }; yy += 14*U;
-      menuButton(bx, yy, bw, 9*U, 'New Game', false);
-      newBtn = { x: bx, y: yy, w: bw, h: 9*U }; yy += 12*U;
-    } else {
-      menuButton(bx, yy, bw, 11*U, 'Play', true);
-      playBtn = { x: bx, y: yy, w: bw, h: 11*U }; yy += 14*U;
-    }
+    const hasSave = !!saveData;
+    menuButton(bx, yy, bw, 9*U, 'Continue', false, !hasSave);
+    contBtn = hasSave ? { x: bx, y: yy, w: bw, h: 9*U } : null;
+    yy += 12*U;
+    menuButton(bx, yy, bw, 9*U, 'New Game', false, selectedMap < 0);
+    newBtn = selectedMap >= 0 ? { x: bx, y: yy, w: bw, h: 9*U } : null;
+    yy += 12*U;
     menuButton(bx, yy, bw, 9*U, 'Enter Code', false);
     codeBtn = { x: bx, y: yy, w: bw, h: 9*U }; yy += 15*U;
     // god mode: every ability from the start, health refills instead of dying
@@ -1659,9 +2104,8 @@
     ctx.lineWidth = 1;
     ctx.textAlign = 'start'; ctx.textBaseline = 'alphabetic';
   }
-  // game over: same star-field backdrop and widget style as the menu and pause
   function drawGameOver(){
-    gameOverBtn = null;
+    gameOverBtn = null; gameOverLoadBtn = null;
     if (!gameOver) return;
     drawStarField();
     const cx2 = VIEW_W/2, cy2 = VIEW_H/2;
@@ -1670,8 +2114,12 @@
     ctx.fillStyle = '#60e0d0'; ctx.font = 'bold ' + Math.round(11*U) + MONO;
     ctx.fillText('GAME OVER', cx2, cy2 - 10*U);
     ctx.restore();
-    const bw = 46*U, bh = 11*U, bx = cx2 - bw/2, by = cy2 + 4*U;
-    menuButton(bx, by, bw, bh, 'Main Menu', true);
+    const bw = 46*U, bh = 9*U, bx = cx2 - bw/2;
+    let by = cy2 + 4*U;
+    menuButton(bx, by, bw, bh, 'Load Last Save', false, !saveData);
+    gameOverLoadBtn = saveData ? { x: bx, y: by, w: bw, h: bh } : null;
+    by += 12*U;
+    menuButton(bx, by, bw, bh, 'Main Menu', false);
     gameOverBtn = { x: bx, y: by, w: bw, h: bh };
     ctx.lineWidth = 1;
     ctx.textAlign = 'start'; ctx.textBaseline = 'alphabetic';
@@ -1731,14 +2179,43 @@
     }
     ctx.globalAlpha = 1;
   }
-  // attack draws in layers: bow arm behind, movement legs, attack torso on top
+  // body frame at the origin, shared by drawPlayer and the dash echoes
+  function drawArcherFrame(){
+    if (P.anim === 'ATTACK'){
+      const legDY = P.legs === 'JUMP' ? JUMP_LEG_DY : 0;
+      ctx.drawImage(IMG.archer, P.lframe*FW, LEGROW[P.legs]*FH, FW, FH, -AX/SS, -AY/SS + legDY, FW/SS, FH/SS);
+      ctx.drawImage(IMG.archer, P.frame*FW, ROW.ATTACK*FH, FW, FH, -AX/SS, -AY/SS, FW/SS, FH/SS);
+    } else {
+      ctx.drawImage(IMG.archer, P.frame*FW, ROW[P.anim]*FH, FW, FH, -AX/SS, -AY/SS, FW/SS, FH/SS);
+    }
+  }
   function drawPlayer(){
     const sx = Math.round(P.x + P.w/2 - cam.x);
     const feetY = Math.round(P.y + P.h - cam.y);
+    // dash echoes, fading out after the dash
+    if (P.dashFx > 0 && P.crouchT <= 0){
+      const fade = Math.min(1, P.dashFx / DASH_FADE);
+      ctx.imageSmoothingEnabled = true;
+      for (let k = 4; k >= 1; k--){
+        ctx.save();
+        ctx.translate(Math.round(sx - P.dashDir*13*k), feetY);
+        if (P.face < 0) ctx.scale(-1,1);
+        ctx.globalAlpha = 0.42*(1 - k/5.5)*fade;
+        drawArcherFrame();
+        ctx.restore();
+      }
+      ctx.globalAlpha = 1;
+      ctx.imageSmoothingEnabled = false;
+    }
     ctx.save();
     ctx.translate(sx, feetY);
     if (P.face < 0) ctx.scale(-1,1);
     ctx.imageSmoothingEnabled = true;
+    if (P.crouchT >= 1){
+      drawCrouchPose();
+    } else {
+    // brief squash tween between standing and the crouch composite
+    if (P.crouchT > 0) ctx.scale(1 + 0.08*P.crouchT, 1 - 0.37*P.crouchT);
     if (P.anim === 'ATTACK'){
       const sh = SHOULDER[P.frame] || SHOULDER[0];
       ctx.save();
@@ -1758,7 +2235,48 @@
     } else {
       ctx.drawImage(IMG.archer, P.frame*FW, ROW[P.anim]*FH, FW, FH, -AX/SS, -AY/SS, FW/SS, FH/SS);
     }
+    }
     ctx.imageSmoothingEnabled = false;
+    ctx.restore();
+  }
+  // the crouch composite in the player's face-local space, origin at (center, feet)
+  function drawCrouchPose(){
+    const pose = crouchPose();
+    const th = -pose[0]*Math.PI/180;
+    const pv = crouchPivot(pose);
+    if (P.anim === 'ATTACK'){
+      // bow arm behind, aim stays exact
+      const cs = crouchShoulder(pose);
+      ctx.save();
+      ctx.translate(cs[0]/SS, cs[1]/SS);
+      ctx.rotate(P.aim);
+      ctx.drawImage(IMG.bowarm, P.frame*BW, 0, BW, BH, -BPX/SS, -BPY/SS, BW/SS, BH/SS);
+      if (P.charging){
+        const cg = P.chargeT / CHARGE_MAX;
+        chargeGlow(cg);
+        ctx.drawImage(tintedArrow(cg), GRIP[0]/SS - ARROW_LEN*0.55, GRIP[1]/SS - ARROW_THICK/2, ARROW_LEN, ARROW_THICK);
+        ctx.shadowBlur = 0;
+      }
+      ctx.restore();
+    }
+    // boots squashed about the feet line
+    let lrow, lfr;
+    if (P.anim === 'ATTACK'){ lrow = LEGROW[P.legs] || ROW.LEGS_IDLE; lfr = P.lframe; }
+    else if (P.anim === 'WALK' || P.anim === 'RUN'){ lrow = ROW.LEGS_WALK; lfr = P.frame; }
+    else { lrow = ROW.LEGS_IDLE; lfr = 0; }
+    const fwd = CR_BASE_FWD + pose[2];
+    ctx.drawImage(IMG.archer, lfr*FW, lrow*FH, FW, FH,
+                  (fwd - AX*CR_LEGS_W)/SS, -AY*pose[3]/SS, FW*CR_LEGS_W/SS, FH*pose[3]/SS);
+    // torso leant over the hip pivot, then squashed
+    const trow = P.anim === 'ATTACK' ? ROW.ATTACK
+               : P.anim === 'HURT' ? ROW.HURT
+               : (P.anim === 'WALK' || P.anim === 'RUN') ? ROW.WALK : ROW.IDLE;
+    ctx.save();
+    ctx.translate(pv[0]/SS, pv[1]/SS);
+    ctx.scale(1, CR_TORSO_SCL);
+    ctx.rotate(th);
+    ctx.drawImage(IMG.archer, P.frame*FW, trow*FH + CR_REG_TOP, FW, CR_REG_H,
+                  -CR_PIV[0]/SS, -CR_PIV[1]/SS, FW/SS, CR_REG_H/SS);
     ctx.restore();
   }
   function drawChargeFx(){
@@ -1884,7 +2402,7 @@
       ctx.strokeRect(x0+0.5,y0+0.5,bw-1,bh-1);
     }
   }
-  // F3 overlay: knight state, route markers (green launch, blue landing)
+  // key-2 overlay: enemy state, route markers, weapon strips
   function drawDebug(){
     if (!debugAI) return;
     ctx.font = '11px ui-monospace, monospace';
@@ -1904,6 +2422,19 @@
       if (r && r.drop){
         ctx.strokeStyle = '#ff8020';
         ctx.strokeRect(r.drop.tx*TILE - cam.x, Math.floor((k.y+k.h)/TILE)*TILE - cam.y, TILE, TILE);
+      }
+      // weapon strips: reach envelope faint, live frame solid red
+      if (!k.dead && k.T.reach){
+        const env = weaponRect(k, k.T.reach);
+        ctx.strokeStyle = 'rgba(255,160,40,0.5)';
+        ctx.strokeRect(env.x - cam.x, env.y - cam.y, env.w, env.h);
+        if (k.attackT > 0 && !k.castKind){
+          ctx.strokeStyle = '#ff3030';
+          for (const b of k.T.weapon[k.frame] || []){
+            const wb = weaponRect(k, b);
+            ctx.strokeRect(wb.x - cam.x, wb.y - cam.y, wb.w, wb.h);
+          }
+        }
       }
     }
   }
@@ -1949,7 +2480,7 @@
   function render(){
     ctx.setTransform(SCALE,0,0,SCALE,0,0);
     ctx.lineWidth = 1;   // menu/pause buttons stroke at 1.5, don't let it leak into the world's strokes
-    drawBackground(); drawTiles(); drawStuck(); drawPickups(); drawStations(); drawKnights(); drawKFx(); drawArrows(); drawFX(); drawBoostFx(); drawPlayer(); drawChargeFx(); drawBombs(); drawCrowns(); drawHUD(); drawDebug(); drawNotice(); drawPaused(); drawGameOver(); drawMenu();
+    drawBackground(); drawTiles(); drawStuck(); drawPickups(); drawStations(); drawKnights(); drawKFx(); drawBolts(); drawArrows(); drawFX(); drawBoostFx(); drawPlayer(); drawChargeFx(); drawBombs(); drawCrowns(); drawHUD(); drawDebug(); drawNotice(); drawSpawnMenu(); drawPaused(); drawGameOver(); drawMenu();
   }
 
   // ---------- responsive fit ----------
@@ -1991,6 +2522,7 @@
   // leave the menu and begin a run, fresh or from a save station
   function startRun(save){
     menu = false; stopMenuMusic(); codeEntry = null;
+    theme = THEMES[selectedMap] || THEMES[0];
     if (save){
       applyAbilities(save.abilities);
       const st = STATIONS[save.station] || STATIONS[0];
@@ -2015,11 +2547,12 @@
     Object.assign(P, freshPlayer());
     knights.length = 0; for (const k of freshKnights()) knights.push(k);
     hp = 99; if (hpEl) hpEl.textContent = hp;
-    arrows.length = 0; fx.length = 0; stuck.length = 0; bombs.length = 0; chargeFx.length = 0; kFx.length = 0;
+    arrows.length = 0; fx.length = 0; stuck.length = 0; bombs.length = 0; chargeFx.length = 0; kFx.length = 0; bolts.length = 0;
+    spawnMenu = false; spawnBtns = null;
     for (const pk of pickups) pk.taken = false;
     pDmgCd = 0; pLastNode = -1;
     notice = null; noticeBtn = null; paused = false;
-    gameOver = false; gameOverBtn = null;
+    gameOver = false; gameOverBtn = null; gameOverLoadBtn = null;
     codeEntry = null;
     for (const st of STATIONS) st.armed = true;
     cam.x = 0; cam.y = CAM_SURF_Y; camRegion = 1; camTrans = 0; camFromX = 0; camFromY = CAM_SURF_Y;
@@ -2036,7 +2569,7 @@
     if (lastT == null) lastT = now;
     acc = Math.min(acc + (now - lastT), MAX_ACC);
     lastT = now;
-    if (!menu && !paused && !notice && !gameOver){
+    if (!menu && !paused && !notice && !gameOver && !spawnMenu){
       while (acc >= STEP_MS){ update(); acc -= STEP_MS; }
     } else { chargeSndStop(); boostSndStop(); acc = 0; }
     render();
@@ -2049,7 +2582,7 @@
   const LOADING_MIN_MS = 2000;
   const loadingStart = performance.now();
   const loadingEl = document.getElementById('loading-overlay');
-  const imgKeys = ['archer','bowarm','grass','dirt','arrow','bark','leaf','knight'];
+  const imgKeys = ['archer','bowarm','grass','dirt','arrow','bark','leaf','knight','ngrass','ndirt','nbark','nleaf'].concat(['knight2','knight3','troll1','troll2','troll3','skel1','skel2','skel3','necro1','necro2','necro3']);
   const imagesReady = Promise.all(imgKeys.map(k => new Promise(res => {
     IMG[k].onload = res;
     IMG[k].onerror = () => { console.error('asset failed to decode: ' + k); res(); };

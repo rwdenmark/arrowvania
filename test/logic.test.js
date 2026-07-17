@@ -173,3 +173,34 @@ test('decodeSave rejects corrupted or malformed codes', () => {
   assert.equal(LOGIC.decodeSave(null), null);
   assert.equal(LOGIC.decodeSave('!!!!-!!!!'), null);
 });
+
+test('moveSwept lands on a floor and stops under a ceiling', () => {
+  const { moveSwept } = physFor([
+    '####',
+    '....',
+    '....',
+    '####',
+  ]);
+  const E = { x: TILE, y: 1.2 * TILE, w: TILE * 0.5, h: TILE, vx: 0, vy: 0 };
+  moveSwept(E, 0, 10 * TILE);   // slam it down
+  assert.ok(Math.abs(E.y + E.h - 3 * TILE) < 0.01, `rests on the floor, got ${E.y}`);
+  assert.equal(E.vy, 0);
+  moveSwept(E, 0, -10 * TILE);  // hurl it up
+  assert.ok(Math.abs(E.y - TILE) < 0.01, `stopped under the ceiling, got ${E.y}`);
+});
+
+test('bfsRoute drops off a ledge without needing jumps', () => {
+  // upper platform on the left, floor below to the right
+  const rows = [
+    '......',
+    '##....',
+    '......',
+    '######',
+  ];
+  const { bfsRoute } = physFor(rows);
+  const LW = rows[0].length;
+  const start = node(LW, 0, 1);   // on the platform
+  const goal = node(LW, 4, 3);    // on the low floor
+  assert.ok(bfsRoute(start, goal, false), 'falling is a legal move without jumps');
+  assert.equal(bfsRoute(goal, start, false), null, 'no route back up without jumps');
+});

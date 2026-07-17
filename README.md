@@ -14,13 +14,21 @@ Opens http://localhost:8080 in your browser. Any static file server works too, e
 
 Runs the logic suite in `test/` on Node's built-in runner (Node 18+). Use the scoped command so stray IDE build copies under `out/` are not picked up.
 
+## Maps
+
+sandbox1 is the sunny prototype level. sandbox2 is the foggy-graveyard night theme with animated rain and its own tiles, on the same layout for now. `assets/build_night_tiles.py` regenerates the night tiles from the day set.
+
 ## Saving
 
 Save stations in the world store your progress in the browser and heal you. Each save also shows a short code, and Enter Code on the menu rebuilds the save from the code alone, so progress survives cleared browser data.
 
 ## Controls
 
-A/D move, Space jump, S to fast-fall, left click aims and shoots, Esc pauses. Abilities are found in the world.
+A/D move, Space jump, S to crouch, Shift to dash, Q drops bombs, left click aims and shoots, 1 opens the enemy spawn menu, 2 toggles the enemy info overlay, Esc pauses. Crouching halves your height and slows the walk. The dash covers 5 tiles on a 5 second cooldown and holds altitude mid-air. In the air, S drops you faster. Abilities are found in the world.
+
+## Enemies
+
+Twelve enemy types share one chassis with knight-1 stats: knights 1-3, trolls 1-3, skeletons 1-3, and necromancers 1-3. Only knight 1 has the lunge. Necromancers fight from range with a bolt and summon their matching skeleton (one owed every 8s, two alive per caster). The level starts empty, spawn enemies with the 1 menu. `assets/build_enemies.py` rebakes the eleven new sheets from the craftpix knight, trolls, and necromancer zips into one asset file per family.
 
 ## Assets
 
