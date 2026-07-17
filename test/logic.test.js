@@ -145,3 +145,31 @@ test('aimBoost adds motion along the aim and never against it', () => {
   // vertical: aim straight down (c=0, sn=1) while falling adds the fall speed
   assert.equal(LOGIC.aimBoost(0, 3, 0, 1, 1), 3);
 });
+
+test('save codes round-trip for every map, station, and ability mask', () => {
+  for (let map = 0; map < 2; map++)
+    for (let station = 0; station < 3; station++)
+      for (let abilities = 0; abilities < 16; abilities++){
+        const s = { version: 1, map, station, abilities };
+        const code = LOGIC.encodeSave(s);
+        assert.match(code, /^[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$/);
+        assert.deepEqual(LOGIC.decodeSave(code), s);
+      }
+});
+
+test('decodeSave forgives case, spacing, and lookalike characters', () => {
+  const s = { version: 1, map: 0, station: 2, abilities: 11 };
+  const code = LOGIC.encodeSave(s);
+  const sloppy = (' ' + code.toLowerCase().replace('-', '  ') + ' ').replace(/0/g, 'o');
+  assert.deepEqual(LOGIC.decodeSave(sloppy), s);
+});
+
+test('decodeSave rejects corrupted or malformed codes', () => {
+  const code = LOGIC.encodeSave({ version: 1, map: 0, station: 1, abilities: 3 });
+  const bad = (code[0] === 'A' ? 'B' : 'A') + code.slice(1);
+  assert.equal(LOGIC.decodeSave(bad), null);
+  assert.equal(LOGIC.decodeSave('ABCD'), null);
+  assert.equal(LOGIC.decodeSave(''), null);
+  assert.equal(LOGIC.decodeSave(null), null);
+  assert.equal(LOGIC.decodeSave('!!!!-!!!!'), null);
+});

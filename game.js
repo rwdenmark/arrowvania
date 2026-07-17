@@ -132,25 +132,29 @@
   // baked WAVs decode once, the charge hum is synthesized live so it can hold while the button is held
   let AC = null, chargeSnd = null;
   const sfxBuf = {};
-  function initAudio(){
-    if (AC){ if (AC.state === 'suspended') AC.resume(); return; }
+  const sfxReady = [];   // decode promises, the first-load gate waits on these
+  // same loading system as Recurve / Astro Siege: build the context and start every
+  // decode at load (the context sleeps until the first gesture resumes it), so the
+  // Play click can never race its own sound
+  (function setupAudio(){
     const Ctx = window.AudioContext || window.webkitAudioContext;
     if (!Ctx) return;
-    AC = new Ctx();
+    AC = new Ctx({ latencyHint: 'interactive' });
     for (const k of ['step','jump','fire','dirt','wood']){
       const url = ASSETS['sfx_' + k]; if (!url) continue;
       const bin = atob(url.split(',')[1]);
       const bytes = new Uint8Array(bin.length);
       for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-      AC.decodeAudioData(bytes.buffer)
+      sfxReady.push(AC.decodeAudioData(bytes.buffer)
         .then(b => { sfxBuf[k] = b; })
-        .catch(err => console.error('sfx failed to decode: ' + k, err));
+        .catch(err => console.error('sfx failed to decode: ' + k, err)));
     }
     // the UI click for the Play button (same asset Recurve uses)
-    fetch('card_select.mp3').then(r => r.arrayBuffer()).then(b => AC.decodeAudioData(b))
+    sfxReady.push(fetch('card_select.mp3').then(r => r.arrayBuffer()).then(b => AC.decodeAudioData(b))
       .then(b => { sfxBuf['select'] = b; })
-      .catch(err => console.error('sfx failed to decode: select', err));
-  }
+      .catch(err => console.error('sfx failed to decode: select', err)));
+  })();
+  function initAudio(){ if (AC && AC.state === 'suspended') AC.resume(); }
   function playSfx(name, vol, rate){
     if (!AC || SND.sfx.muted) return;
     const b = sfxBuf[name]; if (!b) return;
@@ -265,12 +269,30 @@
   addEventListener('keydown', e => {
     initAudio();
     keys[e.code] = true;
-    if (menu){ startMenuMusic(); return; }
-    if (e.code === 'Escape' && !notice){ paused = !paused; if (!paused) P.jumpBuf = 0; }
+    if (menu){
+      startMenuMusic();
+      if (codeEntry){
+        if (e.code === 'Escape'){ codeEntry = null; }
+        else if (e.code === 'Backspace'){ codeEntry.text = codeEntry.text.slice(0, -1); codeEntry.err = false; }
+        else if (e.code === 'Enter' || e.code === 'NumpadEnter'){
+          const d = LOGIC.decodeSave(codeEntry.text);
+          if (d && MAPS[d.map] && !MAPS[d.map].locked && STATIONS[d.station]){
+            writeSave(d); selectedMap = d.map;
+            playSfx('select', 1.5);
+            startRun(d);
+          } else codeEntry.err = true;
+        }
+        else if (e.key && e.key.length === 1 && /[a-zA-Z0-9]/.test(e.key) && codeEntry.text.length < 8){
+          codeEntry.text += e.key.toUpperCase(); codeEntry.err = false;
+        }
+      }
+      return;
+    }
+    if (e.code === 'Escape' && !notice && !gameOver && !e.repeat){ paused = !paused; if (!paused){ P.jumpBuf = 0; cancelStaleCharge(); } }
     if (e.code === 'F3') debugAI = !debugAI;
-    if ((e.code === 'ShiftLeft' || e.code === 'ShiftRight') && !e.repeat && !paused && !notice) tryDropBomb();
+    if ((e.code === 'ShiftLeft' || e.code === 'ShiftRight') && !e.repeat && !paused && !notice && !gameOver) tryDropBomb();
     if (e.code === 'KeyS' && P.boost) P.boost = false;   // press S to stop the speed booster immediately
-    if (e.code === 'Space'){ if (!e.repeat && !paused && !notice) P.jumpBuf = P_JUMP_BUF; e.preventDefault(); }
+    if (e.code === 'Space'){ if (!e.repeat && !paused && !notice && !gameOver) P.jumpBuf = P_JUMP_BUF; e.preventDefault(); }
   });
   addEventListener('keyup',   e => { keys[e.code] = false; });
   // clear input on focus loss, and cancel a held charge instead of firing it blind
@@ -295,15 +317,26 @@
     toWorldMouse(e);
     if (menu){
       startMenuMusic();
-      if (inRect(mouse, playBtn)){ playSfx('select', 1.5); menu = false; stopMenuMusic(); }
+      if (codeEntry) return;   // the code panel is keyboard driven
+      if (mapBtns) for (let i = 0; i < MAPS.length; i++){
+        if (!MAPS[i].locked && inRect(mouse, mapBtns[i])){ selectedMap = i; playSfx('select', 1.5); return; }
+      }
+      if (inRect(mouse, godBtn)){ godMode = !godMode; playSfx('select', 1.5); return; }
+      if (inRect(mouse, contBtn) && saveData && saveData.map === selectedMap){ playSfx('select', 1.5); startRun(saveData); return; }
+      if ((inRect(mouse, playBtn) || inRect(mouse, newBtn)) && !MAPS[selectedMap].locked){ playSfx('select', 1.5); startRun(null); return; }
+      if (inRect(mouse, codeBtn)){ playSfx('select', 1.5); codeEntry = { text: '', err: false }; return; }
       return;
     }
     if (notice){
       if (inRect(mouse, noticeBtn)) dismissNotice();
       return;
     }
+    if (gameOver){
+      if (inRect(mouse, gameOverBtn)){ playSfx('select', 1.5); resetGame(); }
+      return;
+    }
     if (paused){
-      if (inRect(mouse, resumeBtn)){ playSfx('select', 1.5); paused = false; P.jumpBuf = 0; }
+      if (inRect(mouse, resumeBtn)){ playSfx('select', 1.5); paused = false; P.jumpBuf = 0; cancelStaleCharge(); }
       else if (inRect(mouse, quitBtn)){ playSfx('select', 1.5); resetGame(); }
       return;
     }
@@ -419,11 +452,21 @@
     playSfx('fire', 0.8 + 0.4*cg, 1 - 0.12*cg);
   }
 
-  // ---------- player health (rolls back to 99 at zero, no death yet) ----------
+  // ---------- player health: death at 0 shows game over (god mode refills) ----------
   const hpEl = document.getElementById('health-value');
   let hp = 99;
   function damage(n){
-    hp -= n; if (hp <= 0) hp = 99;
+    hp -= n;
+    if (hp <= 0){
+      if (godMode) hp = 99;   // god mode: straight back to full instead of dying
+      else {
+        hp = 0;
+        if (hpEl) hpEl.textContent = hp;
+        gameOver = true;
+        chargeSndStop(); boostSndStop();
+        return;
+      }
+    }
     if (hpEl) hpEl.textContent = hp;
     P.hurtT = P_HURT;
   }
@@ -443,23 +486,68 @@
       fill: '#c04b7a', edge: '#ffe27a', glow: 'rgba(255,120,200,0.9)',
       title: 'Speed Booster', verb: 'Run', key: '6 tiles', tail: 'straight to charge' },
   ];
+  // ---------- save stations: touch one to save + heal, the code restores anywhere ----------
+  const STATIONS = [
+    { tx: 5,  fr: SURF, armed: true },   // surface, near the spawn
+    { tx: 18, fr: 29,   armed: true },   // underground room
+    { tx: 17, fr: 11,   armed: true },   // sky room
+  ];
+  const ABILITY_BITS = { double: 1, charge: 2, bomb: 4, boost: 8 };
+  function abilitiesMask(){
+    return (P.canDouble ? 1 : 0) | (P.canCharge ? 2 : 0) | (P.canBomb ? 4 : 0) | (P.canBoost ? 8 : 0);
+  }
+  function applyAbilities(mask){
+    P.canDouble = !!(mask & 1); P.canCharge = !!(mask & 2);
+    P.canBomb = !!(mask & 4); P.canBoost = !!(mask & 8);
+    for (const pk of pickups) pk.taken = !!(mask & ABILITY_BITS[pk.kind]);
+  }
+  // the save lives in localStorage, and the code alone can rebuild it (logic.js)
+  function loadSave(){
+    try {
+      const d = JSON.parse(localStorage.getItem('arrowvania.save') || 'null');
+      if (d && d.version === 1 && MAPS[d.map] && STATIONS[d.station] && typeof d.abilities === 'number') return d;
+    } catch (_) {}
+    return null;
+  }
+  function writeSave(d){
+    saveData = d;
+    try { localStorage.setItem('arrowvania.save', JSON.stringify(d)); } catch (_) {}
+  }
+  function doSave(i){
+    writeSave({ version: 1, map: selectedMap, station: i, abilities: abilitiesMask() });
+    hp = 99; if (hpEl) hpEl.textContent = hp;   // stations heal to full
+    playSfx('select', 1.2, 0.85);
+    notice = { title: 'Game Saved', verb: 'Code', key: LOGIC.encodeSave(saveData), tail: 'restores this save' };
+  }
   // pickup notification modal, pauses the game until Continue is clicked
   let notice = null, noticeBtn = null, paused = false;
-  let menu = true, playBtn = null, quitBtn = null, resumeBtn = null, menuMusic = null;
+  let menu = true, playBtn = null, quitBtn = null, resumeBtn = null;
+  const menuMusic = new Audio('menu.mp3'); menuMusic.loop = true;   // created at load so it prefetches
+  // main-menu map selection. sandbox1 is the current level, sandbox2 is a locked placeholder
+  const MAPS = [{ name: 'sandbox1', locked: false }, { name: 'sandbox2', locked: true }];
+  let selectedMap = 0, mapBtns = null;
+  let godMode = false, godBtn = null;         // menu checkbox: all abilities, health refills
+  let gameOver = false, gameOverBtn = null;   // 0 hp shows the game-over screen
+  let contBtn = null, newBtn = null, codeBtn = null;
+  let codeEntry = null;                       // { text, err } while the Enter Code panel is open
+  let saveData = loadSave();                  // last save, kept in sync by writeSave
   const inRect = (m, b) => !!b && m.sx >= b.x && m.sx <= b.x + b.w && m.sy >= b.y && m.sy <= b.y + b.h;
   function startMenuMusic(){
     if (!menu) return;
-    if (!menuMusic){ menuMusic = new Audio('menu.mp3'); menuMusic.loop = true; }
     menuMusic.volume = SND.music.muted ? 0 : SND.music.vol;
     menuMusic.play().catch(() => {});
   }
-  function stopMenuMusic(){ if (menuMusic){ menuMusic.pause(); menuMusic.currentTime = 0; } }
-  function updateMusicVol(){ if (menuMusic) menuMusic.volume = SND.music.muted ? 0 : SND.music.vol; }
+  function stopMenuMusic(){ menuMusic.pause(); menuMusic.currentTime = 0; }
+  function updateMusicVol(){ menuMusic.volume = SND.music.muted ? 0 : SND.music.vol; }
   function notify(pk){ notice = { title: 'You gained ' + pk.title, verb: pk.verb, key: pk.key, tail: pk.tail }; }
   function dismissNotice(){
     notice = null; noticeBtn = null;
     P.jumpBuf = 0; mouse.down = false;
     if (P.charging){ P.charging = false; P.attackT = RECOVER_TICKS; chargeSndStop(); }
+  }
+  // a charge whose button was released while paused would fire blind on resume, cancel it instead
+  function cancelStaleCharge(){
+    if (P.charging && !mouse.down){ P.charging = false; P.attackT = RECOVER_TICKS; }
   }
 
   // ---------- knight enemy ----------
@@ -469,7 +557,7 @@
   const KN_ATTACK_DUR = SEC(0.5), KN_ATK_CD = SEC(0.35), KN_HURT = SEC(0.11);
   const KN_JMP_CD = SEC(0.25);                            // breather after a landing
   const AI_REPATH = SEC(0.2), AI_REPATH_SLOW = SEC(0.6);  // how often the knight replans / paces
-  const KN_GIVEUP = SEC(2);   // stand watching an unreachable player this long, then return home
+  const KN_GIVEUP = SEC(5);   // stand watching an unreachable player this long, then return home
   const KN_REACH = Math.round(1.2*TILE);   // matches the spear thrust
   const KN_CX = 108;                        // body center in sheet px, so a 180 pivots in place
   // lunge: stance for 3s with the spear leveled, then a 6-tile dash for 40 damage
@@ -482,7 +570,7 @@
       vx: 0, vy: 0, face: -1, onGround: false, hp: 20,
       anim: 'IDLE', frame: 0, ftime: 0, attackT: 0, didHit: false,
       hurtT: 0, atkCd: 0, aggro: false, running: false, jumpTx: null, jumpTy: 0, jumpGap: false,
-      route: null, pathT: 0, lastPN: -1, settleX: null, goalHome: false, patDir: 1, patT: 0,
+      route: null, pathT: 0, routeAge: 0, lastPN: -1, settleX: null, goalHome: false, patDir: 1, patT: 0,
       jmpCd: 0, wasGround: true, jumpFrom: null, jumpFails: 0,
       lungeCd: 0, lungeT: 0, lungeDash: 0, lungeHit: false, dashPrevX: null,
       stranded: false, gaveUp: false, dead: false, dieT: 0, holdT: 0 }
@@ -669,7 +757,15 @@
         } else if (k.onGround || k.jumpTx == null){
           // destination is the player if reachable, else home, else pace. routes pinned until the timer or the player's node changes
           const pn = P.onGround ? groundNode(P) : pLastNode;
-          if (--k.pathT <= 0 || (k.aggro && k.lastPN !== pn)){
+          // a planned jump or drop stays committed while the goal holds still. Replanning
+          // mid-approach let BFS tie-breaks flip the first hop (drop left vs jump right)
+          // as the start tile changed, so the knight bounced between two plans forever.
+          const hopPending = !!(k.route && (k.route.jump || k.route.drop));
+          const goalMoved = k.aggro && !k.goalHome && k.lastPN !== pn;
+          if (--k.pathT <= 0 && hopPending && !goalMoved && ++k.routeAge < 15){
+            k.pathT = AI_REPATH;   // recheck soon, but keep the committed hop
+          } else if (k.pathT <= 0 || goalMoved){
+            k.routeAge = 0;
             k.pathT = AI_REPATH;
             k.lastPN = pn;
             k.route = null; k.goalHome = false; k.stranded = false;
@@ -956,6 +1052,14 @@
         if (pk.kind === 'boost') P.canBoost = true;
         notify(pk);
       }
+    }
+
+    // save stations: arm when you step off, save once when you land on one
+    for (let i = 0; i < STATIONS.length; i++){
+      const st = STATIONS[i];
+      const r = { x: st.tx*TILE, y: (st.fr-1)*TILE, w: TILE, h: TILE };
+      if (overlaps(P, r)){ if (st.armed && P.onGround){ st.armed = false; doSave(i); } }
+      else st.armed = true;
     }
 
     // how long left click has been held, so a power shot winds up only on a deliberate hold
@@ -1251,6 +1355,29 @@
       ctx.strokeRect(x + 2*U + 0.5, y + 2*U + 0.5, pk.w - 4*U - 1, pk.h - 4*U - 1);
     }
   }
+  // save stations: a floor plate with a floating beacon, dimmer right after a save
+  function drawStations(){
+    const t = performance.now()*0.003;
+    for (const st of STATIONS){
+      const x = st.tx*TILE - cam.x, y = st.fr*TILE - cam.y;
+      if (x < -TILE || x > VIEW_W + TILE || y < -TILE*2 || y > VIEW_H + TILE) continue;
+      const p = 0.5 + 0.5*Math.sin(t + st.tx);
+      ctx.save();
+      ctx.fillStyle = '#0e2a30';
+      ctx.fillRect(x + 2*U, y - 2.5*U, TILE - 4*U, 2.5*U);
+      ctx.strokeStyle = st.armed ? '#60e0d0' : '#2f8f85'; ctx.lineWidth = 1;
+      ctx.strokeRect(x + 2*U + 0.5, y - 2.5*U + 0.5, TILE - 4*U - 1, 2.5*U - 1);
+      const cx3 = x + TILE/2, cy3 = y - 7*U - 1.5*U*p;
+      ctx.shadowColor = 'rgba(96,224,208,' + (0.35 + 0.45*p).toFixed(3) + ')';
+      ctx.shadowBlur = 6 + 6*p;
+      ctx.fillStyle = st.armed ? '#60e0d0' : '#2f8f85';
+      ctx.beginPath();
+      ctx.moveTo(cx3, cy3 - 3*U); ctx.lineTo(cx3 + 2.2*U, cy3);
+      ctx.lineTo(cx3, cy3 + 3*U); ctx.lineTo(cx3 - 2.2*U, cy3);
+      ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
+  }
   // muted text with an accent keycap, like the bottom bar hints
   function keycapLine(cx2, ly, verb, key, tail){
     const vw = ctx.measureText(verb + ' ').width;
@@ -1401,15 +1528,18 @@
     grad.addColorStop(0, '#0a1420'); grad.addColorStop(0.55, '#070b12'); grad.addColorStop(1, '#04060a');
     ctx.fillStyle = grad; ctx.fillRect(0, 0, VIEW_W, VIEW_H);
     const t = performance.now();
+    // real elapsed time drives the drift (and the comets below), so the speed
+    // doesn't follow the display's refresh rate. 0.0216 px/ms = the old
+    // 0.15 px/frame at 144 Hz.
+    const dt = cometLastT ? Math.min(80, t - cometLastT) : 7;
+    cometLastT = t;
     for (const st of STARS){
-      st.x += 0.15; if (st.x > VIEW_W) st.x = 0;
+      st.x += 0.0216 * dt; if (st.x > VIEW_W) st.x = 0;
       const tw = 0.35 + 0.65*Math.abs(Math.sin(t*0.001*st.sp + st.ph));
       ctx.fillStyle = 'rgba(150,205,255,' + tw.toFixed(2) + ')';
       ctx.beginPath(); ctx.arc(st.x, st.y, st.r*(0.7 + 0.5*tw), 0, Math.PI*2); ctx.fill();
     }
-    // comets: spawn on a randomized timer, advance by real elapsed time, cross fully then leave
-    const dt = cometLastT ? Math.min(80, t - cometLastT) : 16;
-    cometLastT = t;
+    // comets: spawn on a randomized timer, cross fully then leave
     if (t >= cometNextT) spawnComet(t);
     ctx.lineCap = 'round';
     for (let i = comets.length - 1; i >= 0; i--){
@@ -1425,25 +1555,125 @@
       ctx.beginPath(); ctx.moveTo(c.x, c.y); ctx.lineTo(tailX, tailY); ctx.stroke();
     }
     ctx.lineCap = 'butt';
+    ctx.lineWidth = 1;   // comets vary the width, don't let it bleed into the menu strokes
   }
   function drawMenuBg(){ drawStarField(); }
   function drawMenu(){
-    playBtn = null;
+    playBtn = null; mapBtns = null; godBtn = null; contBtn = null; newBtn = null; codeBtn = null;
     if (!menu) return;
     drawMenuBg();   // dark twinkling-star backdrop
     const cx2 = VIEW_W/2, cy2 = VIEW_H/2;
     ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
     ctx.save(); ctx.shadowColor = 'rgba(96,224,208,0.45)'; ctx.shadowBlur = 18;
     ctx.fillStyle = '#60e0d0'; ctx.font = 'bold ' + Math.round(13*U) + MONO;
-    ctx.fillText('ARROWVANIA', cx2, cy2 - 14*U);
+    ctx.fillText('ARROWVANIA', cx2, cy2 - 24*U);
     ctx.restore();
-    const bw = 46*U, bh = 12*U, bx = cx2 - bw/2, by = cy2 + 3*U;
-    const hov = inRect(mouse, { x: bx, y: by, w: bw, h: bh });
-    ctx.fillStyle = hov ? 'rgba(96,224,208,0.4)' : 'rgba(24,120,120,0.3)'; roundRect(bx, by, bw, bh, 2*U); ctx.fill();
-    ctx.strokeStyle = hov ? '#d9fff8' : '#60e0d0'; roundRect(bx, by, bw, bh, 2*U); ctx.stroke();
-    ctx.fillStyle = hov ? '#eafffb' : '#60e0d0'; ctx.font = 'bold ' + Math.round(6*U) + MONO;
-    ctx.fillText('Play', cx2, by + bh/2);
-    playBtn = { x: bx, y: by, w: bw, h: bh };
+    // map selection: sandbox1 is playable, sandbox2 sits grayed out until it exists
+    const mw = 30*U, mh = 9*U, mgap = 4*U;
+    const mx0 = cx2 - mw - mgap/2, my0 = cy2 - 9*U;
+    mapBtns = [];
+    for (let i = 0; i < MAPS.length; i++){
+      const b = { x: mx0 + i*(mw + mgap), y: my0, w: mw, h: mh };
+      mapBtns.push(b);
+      const m = MAPS[i];
+      const hovM = !m.locked && inRect(mouse, b);
+      const sel = i === selectedMap && !m.locked;
+      if (m.locked){
+        ctx.fillStyle = 'rgba(70,76,84,0.18)';
+        ctx.strokeStyle = '#3c434c';
+      } else {
+        ctx.fillStyle = sel ? (hovM ? 'rgba(96,224,208,0.4)' : 'rgba(96,224,208,0.26)')
+                            : (hovM ? 'rgba(96,224,208,0.18)' : 'rgba(24,120,120,0.18)');
+        ctx.strokeStyle = sel ? (hovM ? '#d9fff8' : '#60e0d0') : (hovM ? '#8ceade' : '#2f8f85');
+      }
+      ctx.lineWidth = sel ? 2 : 1.5;
+      roundRect(b.x, b.y, b.w, b.h, 2*U); ctx.fill();
+      roundRect(b.x, b.y, b.w, b.h, 2*U); ctx.stroke();
+      ctx.fillStyle = m.locked ? '#5b636c' : sel ? '#eafffb' : '#9adbd3';
+      ctx.font = 'bold ' + Math.round(3.8*U) + MONO;
+      ctx.fillText(m.name, b.x + b.w/2, b.y + b.h/2);
+    }
+    if (codeEntry){
+      // Enter Code panel: type the code, Enter loads it, Esc backs out
+      const pw = 62*U, ph = 27*U, px2 = cx2 - pw/2, py2 = cy2 + 3*U;
+      ctx.fillStyle = 'rgba(14,16,19,0.97)'; ctx.lineWidth = 1.5;
+      roundRect(px2, py2, pw, ph, 3*U); ctx.fill();
+      ctx.strokeStyle = '#60e0d0'; roundRect(px2, py2, pw, ph, 3*U); ctx.stroke();
+      ctx.fillStyle = '#e8ecf0'; ctx.font = 'bold ' + Math.round(4.5*U) + MONO;
+      ctx.fillText('Enter Code', cx2, py2 + 5*U);
+      const raw = codeEntry.text;
+      const shown = raw.length > 4 ? raw.slice(0, 4) + '-' + raw.slice(4) : raw;
+      const caret = performance.now() % 1000 < 500 ? '_' : ' ';
+      const ibw = 40*U, ibh = 9*U, ibx = cx2 - ibw/2, iby = py2 + 9*U;
+      ctx.fillStyle = 'rgba(8,16,28,0.9)'; roundRect(ibx, iby, ibw, ibh, 2*U); ctx.fill();
+      ctx.strokeStyle = codeEntry.err ? '#ff6a55' : '#2f8f85'; roundRect(ibx, iby, ibw, ibh, 2*U); ctx.stroke();
+      ctx.fillStyle = '#d9fff8'; ctx.font = 'bold ' + Math.round(5*U) + MONO;
+      ctx.fillText(shown + (raw.length < 8 ? caret : ''), cx2, iby + ibh/2);
+      ctx.font = Math.round(3.2*U) + MONO;
+      if (codeEntry.err){ ctx.fillStyle = '#ff6a55'; ctx.fillText('invalid code', cx2, py2 + 22.5*U); }
+      else { ctx.fillStyle = '#8a9099'; ctx.fillText('Enter to load, Esc to cancel', cx2, py2 + 22.5*U); }
+      ctx.lineWidth = 1;
+      ctx.textAlign = 'start'; ctx.textBaseline = 'alphabetic';
+      return;
+    }
+    // buttons: Continue when this map has a save, then New Game, then Enter Code
+    const bw = 46*U, bx = cx2 - bw/2;
+    let yy = cy2 + 4*U;
+    const hasSave = !!(saveData && saveData.map === selectedMap && !MAPS[selectedMap].locked);
+    if (hasSave){
+      menuButton(bx, yy, bw, 11*U, 'Continue', true);
+      contBtn = { x: bx, y: yy, w: bw, h: 11*U }; yy += 14*U;
+      menuButton(bx, yy, bw, 9*U, 'New Game', false);
+      newBtn = { x: bx, y: yy, w: bw, h: 9*U }; yy += 12*U;
+    } else {
+      menuButton(bx, yy, bw, 11*U, 'Play', true);
+      playBtn = { x: bx, y: yy, w: bw, h: 11*U }; yy += 14*U;
+    }
+    menuButton(bx, yy, bw, 9*U, 'Enter Code', false);
+    codeBtn = { x: bx, y: yy, w: bw, h: 9*U }; yy += 15*U;
+    // god mode: every ability from the start, health refills instead of dying
+    ctx.font = Math.round(3.5*U) + MONO;
+    const gLabel = 'God Mode';
+    const gs = 4*U;
+    const gw = gs + 2*U + ctx.measureText(gLabel).width;
+    const gx = cx2 - gw/2, gy = yy;
+    godBtn = { x: gx - 2*U, y: gy - 3.5*U, w: gw + 4*U, h: 7*U };
+    const gHov = inRect(mouse, godBtn);
+    ctx.lineWidth = 1.5;
+    ctx.fillStyle = godMode ? 'rgba(96,224,208,0.26)' : 'rgba(24,120,120,0.15)';
+    ctx.strokeStyle = gHov ? '#d9fff8' : (godMode ? '#60e0d0' : '#2f8f85');
+    roundRect(gx, gy - gs/2, gs, gs, U); ctx.fill();
+    roundRect(gx, gy - gs/2, gs, gs, U); ctx.stroke();
+    if (godMode){
+      ctx.strokeStyle = '#eafffb'; ctx.lineWidth = 2; ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(gx + gs*0.24, gy + gs*0.02);
+      ctx.lineTo(gx + gs*0.44, gy + gs*0.26);
+      ctx.lineTo(gx + gs*0.78, gy - gs*0.26);
+      ctx.stroke();
+      ctx.lineCap = 'butt';
+    }
+    ctx.textAlign = 'left';
+    ctx.fillStyle = godMode ? '#c4f5ec' : '#8a9099';
+    ctx.fillText(gLabel, gx + gs + 2*U, gy);
+    ctx.lineWidth = 1;
+    ctx.textAlign = 'start'; ctx.textBaseline = 'alphabetic';
+  }
+  // game over: same star-field backdrop and widget style as the menu and pause
+  function drawGameOver(){
+    gameOverBtn = null;
+    if (!gameOver) return;
+    drawStarField();
+    const cx2 = VIEW_W/2, cy2 = VIEW_H/2;
+    ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
+    ctx.save(); ctx.shadowColor = 'rgba(96,224,208,0.45)'; ctx.shadowBlur = 18;
+    ctx.fillStyle = '#60e0d0'; ctx.font = 'bold ' + Math.round(11*U) + MONO;
+    ctx.fillText('GAME OVER', cx2, cy2 - 10*U);
+    ctx.restore();
+    const bw = 46*U, bh = 11*U, bx = cx2 - bw/2, by = cy2 + 4*U;
+    menuButton(bx, by, bw, bh, 'Main Menu', true);
+    gameOverBtn = { x: bx, y: by, w: bw, h: bh };
+    ctx.lineWidth = 1;
     ctx.textAlign = 'start'; ctx.textBaseline = 'alphabetic';
   }
   // speed-booster rainbow trail, hue-shifted run strips baked once so drawing is plain blits
@@ -1452,12 +1682,29 @@
   function buildBoostCache(){
     boostCache = [];
     const fw = Math.round(FW/SS), fh = Math.round(FH/SS);
+    // Safari has no canvas filter, so probe once and hue-blend there instead
+    const probe = document.createElement('canvas').getContext('2d');
+    probe.filter = 'hue-rotate(90deg)';
+    const hasFilter = typeof probe.filter === 'string' && probe.filter !== 'none';
     for (let hi = 0; hi < BOOST_HUES; hi++){
       const cv = document.createElement('canvas'); cv.width = fw*NF; cv.height = fh;
       const g = cv.getContext('2d');
       g.imageSmoothingEnabled = true;
-      g.filter = 'hue-rotate(' + Math.round(hi/BOOST_HUES*360) + 'deg) saturate(3) brightness(1.3)';
-      g.drawImage(IMG.archer, 0, ROW.RUN*FH, FW*NF, FH, 0, 0, fw*NF, fh);
+      const hue = Math.round(hi/BOOST_HUES*360);
+      if (hasFilter){
+        g.filter = 'hue-rotate(' + hue + 'deg) saturate(3) brightness(1.3)';
+        g.drawImage(IMG.archer, 0, ROW.RUN*FH, FW*NF, FH, 0, 0, fw*NF, fh);
+      } else {
+        // paint the frames, blend every pixel to this entry's hue, then cut the
+        // silhouette back out. Not identical to hue-rotate but the trail still cycles.
+        g.drawImage(IMG.archer, 0, ROW.RUN*FH, FW*NF, FH, 0, 0, fw*NF, fh);
+        g.globalCompositeOperation = 'hue';
+        g.fillStyle = 'hsl(' + hue + ',100%,60%)';
+        g.fillRect(0, 0, fw*NF, fh);
+        g.globalCompositeOperation = 'destination-in';
+        g.drawImage(IMG.archer, 0, ROW.RUN*FH, FW*NF, FH, 0, 0, fw*NF, fh);
+        g.globalCompositeOperation = 'source-over';
+      }
       boostCache.push(cv);
     }
   }
@@ -1701,13 +1948,14 @@
   }
   function render(){
     ctx.setTransform(SCALE,0,0,SCALE,0,0);
-    drawBackground(); drawTiles(); drawStuck(); drawPickups(); drawKnights(); drawKFx(); drawArrows(); drawFX(); drawBoostFx(); drawPlayer(); drawChargeFx(); drawBombs(); drawCrowns(); drawHUD(); drawDebug(); drawNotice(); drawPaused(); drawMenu();
+    ctx.lineWidth = 1;   // menu/pause buttons stroke at 1.5, don't let it leak into the world's strokes
+    drawBackground(); drawTiles(); drawStuck(); drawPickups(); drawStations(); drawKnights(); drawKFx(); drawArrows(); drawFX(); drawBoostFx(); drawPlayer(); drawChargeFx(); drawBombs(); drawCrowns(); drawHUD(); drawDebug(); drawNotice(); drawPaused(); drawGameOver(); drawMenu();
   }
 
   // ---------- responsive fit ----------
   const stageEl = document.querySelector('.stage');
   const playAreaEl = document.querySelector('.play-area');
-  function fitApp(){
+  function fitOnce(){
     if (!stageEl || !playAreaEl) return;
     const cs = getComputedStyle(stageEl);
     const availW = stageEl.clientWidth  - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
@@ -1719,6 +1967,10 @@
     document.documentElement.style.setProperty('--game-w', dispW+'px');
     playAreaEl.style.visibility = 'visible';
   }
+  // the bars scale with --game-w, which fitOnce sets, which changes the space left
+  // for the game. Run to a fixed point so a maximize lands back at full size instead
+  // of one layout step behind.
+  function fitApp(){ for (let i = 0; i < 3; i++) fitOnce(); }
   addEventListener('resize', fitApp);
   addEventListener('load', fitApp);
   fitApp();
@@ -1736,6 +1988,28 @@
     apply();
   }
 
+  // leave the menu and begin a run, fresh or from a save station
+  function startRun(save){
+    menu = false; stopMenuMusic(); codeEntry = null;
+    if (save){
+      applyAbilities(save.abilities);
+      const st = STATIONS[save.station] || STATIONS[0];
+      st.armed = false;   // don't instantly re-save on the spawn frame
+      P.x = st.tx*TILE + Math.round((TILE - P.w)/2);
+      P.y = st.fr*TILE - P.h;
+      P.vx = 0; P.vy = 0;
+      const sp = screenPos();
+      camRegion = sp.region; camTrans = 0;
+      cam.y = sp.region === 0 ? CAM_SKY_Y : sp.region === 1 ? CAM_SURF_Y : CAM_ROOM_Y;
+      cam.x = sp.region === 1 ? Math.max(0, Math.min(LEVEL_PX_W - VIEW_W, P.x + P.w/2 - VIEW_W/2)) : sp.col*VIEW_W;
+    }
+    if (godMode){
+      // god mode wins: every ability regardless of what the save had
+      P.canDouble = P.canCharge = P.canBomb = P.canBoost = true;
+      for (const pk of pickups) pk.taken = true;
+    }
+  }
+
   // Quit to Main Menu: reset everything in memory and show the menu (no page reload)
   function resetGame(){
     Object.assign(P, freshPlayer());
@@ -1745,6 +2019,9 @@
     for (const pk of pickups) pk.taken = false;
     pDmgCd = 0; pLastNode = -1;
     notice = null; noticeBtn = null; paused = false;
+    gameOver = false; gameOverBtn = null;
+    codeEntry = null;
+    for (const st of STATIONS) st.armed = true;
     cam.x = 0; cam.y = CAM_SURF_Y; camRegion = 1; camTrans = 0; camFromX = 0; camFromY = CAM_SURF_Y;
     mouse.down = false; mouse.downT = 0;
     for (const key in keys) keys[key] = false;
@@ -1759,17 +2036,29 @@
     if (lastT == null) lastT = now;
     acc = Math.min(acc + (now - lastT), MAX_ACC);
     lastT = now;
-    if (!menu && !paused && !notice){
+    if (!menu && !paused && !notice && !gameOver){
       while (acc >= STEP_MS){ update(); acc -= STEP_MS; }
     } else { chargeSndStop(); boostSndStop(); acc = 0; }
     render();
     requestAnimationFrame(loop);
   }
-  let loaded = 0;
+  // first-load gate, same system as Recurve / Astro Siege: the LOADING overlay sits
+  // over the canvas until the images and every sound have landed, and for at least
+  // LOADING_MIN_MS so a fast load doesn't flash it. Failed decodes still resolve,
+  // so the gate can't hang.
+  const LOADING_MIN_MS = 2000;
+  const loadingStart = performance.now();
+  const loadingEl = document.getElementById('loading-overlay');
   const imgKeys = ['archer','bowarm','grass','dirt','arrow','bark','leaf','knight'];
-  const need = imgKeys.length;
-  for (const k of imgKeys){
-    IMG[k].onload = () => { if (++loaded===need) requestAnimationFrame(loop); };
-    IMG[k].onerror = () => { console.error('asset failed to decode: '+k); if (++loaded===need) requestAnimationFrame(loop); };
-  }
+  const imagesReady = Promise.all(imgKeys.map(k => new Promise(res => {
+    IMG[k].onload = res;
+    IMG[k].onerror = () => { console.error('asset failed to decode: ' + k); res(); };
+  })));
+  Promise.allSettled([imagesReady, ...sfxReady]).then(() => {
+    const wait = Math.max(0, LOADING_MIN_MS - (performance.now() - loadingStart));
+    setTimeout(() => {
+      if (loadingEl) loadingEl.classList.add('hidden');
+      requestAnimationFrame(loop);
+    }, wait);
+  });
 })();

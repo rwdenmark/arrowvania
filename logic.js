@@ -25,6 +25,44 @@
     return Math.max(0, vx * c * face + vy * sn);
   }
 
+  // password-style save codes: 25 payload bits plus a 15-bit checksum, packed into
+  // eight Crockford base32 characters (XXXX-XXXX). The code IS the save, so one
+  // written down survives wiped browser data. Payload, low bits first:
+  // version(3) map(3) station(3) abilities(8) reserved(8).
+  const B32 = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';
+  function saveCheck(bits) {
+    let h = (bits ^ 0x5a17) >>> 0;
+    h = Math.imul(h, 2654435761) >>> 0;
+    h ^= h >>> 13;
+    h = Math.imul(h, 97846087) >>> 0;
+    h ^= h >>> 16;
+    return h & 0x7fff;
+  }
+  function encodeSave(s) {
+    const bits = (s.version & 7) + (s.map & 7) * 8 + (s.station & 7) * 64 + (s.abilities & 255) * 512;
+    let full = saveCheck(bits) * 33554432 + bits;   // the checksum rides above the 25 payload bits
+    let out = '';
+    for (let i = 0; i < 8; i++) { out = B32[full % 32] + out; full = Math.floor(full / 32); }
+    return out.slice(0, 4) + '-' + out.slice(4);
+  }
+  // returns { version, map, station, abilities } or null. Forgives case, spacing,
+  // dashes, and the lookalikes O/I/L (the alphabet never emits them).
+  function decodeSave(str) {
+    if (typeof str !== 'string') return null;
+    const norm = str.toUpperCase().replace(/[\s-]/g, '').replace(/O/g, '0').replace(/[IL]/g, '1');
+    if (norm.length !== 8) return null;
+    let full = 0;
+    for (let i = 0; i < 8; i++) {
+      const v = B32.indexOf(norm[i]);
+      if (v < 0) return null;
+      full = full * 32 + v;
+    }
+    const bits = full % 33554432;
+    if (Math.floor(full / 33554432) !== saveCheck(bits)) return null;
+    return { version: bits % 8, map: Math.floor(bits / 8) % 8,
+             station: Math.floor(bits / 64) % 8, abilities: Math.floor(bits / 512) % 256 };
+  }
+
   // Everything that needs the level geometry is bound to one map/dimensions set.
   // Call sites keep the same names via destructuring, so the game reads unchanged.
   function createPhysics(opts) {
@@ -151,7 +189,7 @@
     return { solid, standable, moveAxis, moveSwept, grounded, overlaps, bboxSolid, bfsRoute };
   }
 
-  const LOGIC = { solveJumpV, overlaps, arrowDamage, aimBoost, createPhysics };
+  const LOGIC = { solveJumpV, overlaps, arrowDamage, aimBoost, encodeSave, decodeSave, createPhysics };
   if (typeof module !== 'undefined' && module.exports) module.exports = LOGIC;
   else root.LOGIC = LOGIC;
 })(typeof window !== 'undefined' ? window : globalThis);
