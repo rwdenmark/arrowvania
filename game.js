@@ -775,6 +775,7 @@
   }
   function beginAttack(k, kind){
     k.castKind = kind;
+    if (kind === 2){ k.summonCX = k.x + k.w/2 + k.face*0.9*TILE; k.summonFace = k.face; k.summonRise = 0; }
     if (k.wasGuard){ k.attackT = KN_ATTACK_DUR; k.didHit = false; k.frame = k.T.seq[0]; }
     else { k.readyT = KN_READY; k.frame = 0; }
   }
@@ -817,7 +818,7 @@
   }
   function summonSkeleton(k){
     const h = Math.round(1.125*TILE), w = Math.round(0.6*TILE);
-    let x = k.x + k.w/2 + k.face*0.9*TILE - w/2;
+    let x = (k.summonCX != null ? k.summonCX : k.x + k.w/2 + k.face*0.9*TILE) - w/2;
     x = Math.max(TILE, Math.min(LW*TILE - TILE - w, x));
     const y = k.y + k.h - h;
     if (bboxSolid(x, y, w, h)) x = k.x + k.w/2 - w/2;   // blocked in front: rise at the caster
@@ -1000,9 +1001,10 @@
         k.vx = 0;
         const prog = Math.min(KN.FRAMES - 1, Math.floor((KN_ATTACK_DUR - k.attackT)/KN_ATTACK_DUR*KN.FRAMES));
         k.frame = k.T.seq[prog];
+         if (k.castKind === 2) k.summonRise = Math.max(0, Math.min(1, (prog - 6) / 2));
         if (k.castKind){
           // the bolt fires on its launch frame, the summon as it rises
-          if (!k.didHit && prog >= (k.castKind === 2 ? 7 : (k.T.castFrame || 5))){
+          if (!k.didHit && prog >= (k.castKind === 2 ? 9 : (k.T.castFrame || 5))){
             k.didHit = true;
             if (k.castKind === 2) summonSkeleton(k); else castBolt(k);
           }
@@ -2553,10 +2555,36 @@
       }
     }
   }
+  // rising summon preview: the real skeleton sprite emerges from a portal at the
+  // spawn spot during a necromancer cast, so the spawned enemy takes over with no pop
+  function drawSummonRise(){
+    for (const k of knights){
+      if (k.dead || k.castKind !== 2 || k.attackT <= 0 || k.didHit || !(k.summonRise > 0)) continue;
+      const T2 = ETYPES[k.T.summon]; if (!T2 || !T2.meta) continue;
+      const M = T2.meta;
+      const cx = k.summonCX - cam.x, groundY = Math.round(k.y + k.h - cam.y) + 2, rise = k.summonRise;
+      ctx.save();
+      const gr = ctx.createRadialGradient(cx, groundY, 2, cx, groundY, 0.62*TILE);
+      gr.addColorStop(0, k.T.bolt); gr.addColorStop(1, 'rgba(10,20,30,0)');
+      ctx.globalAlpha = 0.55 * (1 - 0.35*rise);
+      ctx.fillStyle = gr;
+      ctx.beginPath(); ctx.ellipse(cx, groundY, 0.62*TILE, 0.24*TILE, 0, 0, Math.PI*2); ctx.fill();
+      ctx.restore();
+      ctx.save();
+      ctx.beginPath(); ctx.rect(0, 0, VIEW_W, groundY + 1); ctx.clip();
+      ctx.imageSmoothingEnabled = true;
+      ctx.translate(Math.round(cx), Math.round(groundY + (1 - rise) * (M.FH/SS)));
+      if (k.summonFace < 0) ctx.scale(-1, 1);
+      ctx.globalAlpha = Math.min(1, 0.4 + rise);
+      ctx.drawImage(IMG[T2.img], 0, 0, M.FW, M.FH, -T2.cx/SS, -M.anchorY/SS, M.FW/SS, M.FH/SS);
+      ctx.restore();
+    }
+    ctx.imageSmoothingEnabled = false;
+  }
   function render(){
     ctx.setTransform(SCALE,0,0,SCALE,0,0);
     ctx.lineWidth = 1;   // menu/pause buttons stroke at 1.5, don't let it leak into the world's strokes
-    drawBackground(); drawTiles(); drawStuck(); drawPickups(); drawStations(); drawKnights(); drawKFx(); drawBolts(); drawArrows(); drawFX(); drawBoostFx(); drawPlayer(); drawChargeFx(); drawBombs(); drawCrowns(); drawHUD(); drawDebug(); drawNotice(); drawSpawnMenu(); drawPaused(); drawGameOver(); drawMenu();
+    drawBackground(); drawTiles(); drawStuck(); drawPickups(); drawStations(); drawKnights(); drawSummonRise(); drawKFx(); drawBolts(); drawArrows(); drawFX(); drawBoostFx(); drawPlayer(); drawChargeFx(); drawBombs(); drawCrowns(); drawHUD(); drawDebug(); drawNotice(); drawSpawnMenu(); drawPaused(); drawGameOver(); drawMenu();
   }
 
   // ---------- responsive fit ----------
