@@ -16,7 +16,7 @@ Runs the logic suite in `test/` on Node's built-in runner (Node 18+). Use the sc
 
 ## Maps
 
-sandbox1 is the sunny prototype level. sandbox2 is the foggy-graveyard night theme with animated rain and its own tiles, on the same layout for now. `assets/build_night_tiles.py` regenerates the night tiles from the day set.
+sandbox1 is the sunny prototype level. sandbox2 is the foggy-graveyard night theme with animated rain and its own tiles, on the same layout for now. `assets/build_night_tiles.py` regenerates the night tiles from the day set. sandbox3 is the daytime castle courtyard with its own layout: granite sett floors under mossy capstones, ivy ashlar boundary walls with animated torch sconces, a two-room dungeon, a stone tower room, a double-jump gate wall, and a castle backdrop with a waving pennant. `assets/build_castle_tiles.py` regenerates the castle tiles.
 
 ## Saving
 

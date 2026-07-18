@@ -22,7 +22,9 @@
                 grass: img(ASSETS.grass), dirt: img(ASSETS.dirt), arrow: img(ASSETS.arrow),
                 bark: img(ASSETS.bark), leaf: img(ASSETS.leaf), knight: img(ASSETS.knight),
                 ngrass: img(ASSETS.night_grass), ndirt: img(ASSETS.night_dirt),
-                nbark: img(ASSETS.night_bark), nleaf: img(ASSETS.night_leaf) };
+                nbark: img(ASSETS.night_bark), nleaf: img(ASSETS.night_leaf),
+                ccap: img(ASSETS.castle_cap), cfill: img(ASSETS.castle_fill),
+                cwall: img(ASSETS.castle_wall) };
   for (const ek of ['knight2','knight3','troll1','troll2','troll3','skel1','skel2','skel3','necro1','necro2','necro3',
                   'orc1','orc2','orc3','elf1','elf2','elf3','warrior1','warrior2','warrior3','pirate1','pirate2','pirate3',
                   'elf1_bolt','warrior3_bolt','pirate2_bolt']) IMG[ek] = img(ASSETS[ek]);
@@ -44,22 +46,10 @@
   const SURF = 20;                    // surface ground top row
   const SKY_ROWS = 12;                // rows 0..11 belong to the sky screen band
   const map = Array.from({length: LH}, () => new Array(LW).fill(0));
-  for (let x = 0; x < LW; x++){ map[SURF][x] = 1; map[SURF+1][x] = 1; }
-  for (let x = 22; x < 26; x++){ map[SURF][x] = 0; map[SURF+1][x] = 0; }   // hole down to the room
-  const plats = [[8,17,4],[14,15,3],[19,16,3],[28,17,5],[35,15,4],[41,17,3],[46,15,5]];
-  for (const [c,r,len] of plats) for (let i=0;i<len;i++) map[r][c+i] = 1;
-  for (let x=52;x<60;x++){ map[SURF-1][x]=1; }
-  // solid underground with the room carved out
-  for (let y=SURF+2; y<LH; y++) for (let x=0; x<LW; x++) map[y][x] = 1;
-  for (let y=22; y<29; y++) for (let x=16; x<29; x++) map[y][x] = 0;
-  for (let x=21; x<24; x++) map[24][x] = 1;   // exit platform, partially under the hole
-  for (let x=22; x<25; x++) map[15][x] = 1;   // floating platform up to the sky room
-  // sky room, entered through the gap in its floor
-  for (let x=15; x<30; x++){ map[1][x] = 1; map[11][x] = 1; }   // ceiling + floor
-  for (let y=1; y<12; y++){ map[y][15] = 1; map[y][29] = 1; }   // side walls
-  for (let x=22; x<25; x++) map[11][x] = 0;                     // entry gap in the floor
   // trees: bark=2, leaf core=3 (solid), soft leaves=4 (pass-through)
   const TREE_CROWNS = [];
+  // wall sconces (sandbox3), world px of each torch cup center
+  const TORCHES = [];
   function plantTree(cx, groundRow, trunkH){
     for (let r = groundRow - trunkH; r < groundRow; r++) map[r][cx] = 2;
     const top = groundRow - trunkH - 4, tiers = [1, 3, 5, 5];
@@ -70,8 +60,79 @@
     for (let r = 0; r < top; r++) if (map[r][cx] === 0) map[r][cx] = 5;
     TREE_CROWNS.push({ cx, top });
   }
-  plantTree(0, SURF, 4);       // both map edges get a tree instead of an invisible wall
-  plantTree(LW-1, SURF-1, 3);
+  // sandbox1/2 share this forest layout; sandbox3 builds the castle courtyard
+  function buildForest(){
+    for (let x = 0; x < LW; x++){ map[SURF][x] = 1; map[SURF+1][x] = 1; }
+    for (let x = 22; x < 26; x++){ map[SURF][x] = 0; map[SURF+1][x] = 0; }   // hole down to the room
+    const plats = [[8,17,4],[14,15,3],[19,16,3],[28,17,5],[35,15,4],[41,17,3],[46,15,5]];
+    for (const [c,r,len] of plats) for (let i=0;i<len;i++) map[r][c+i] = 1;
+    for (let x=52;x<60;x++){ map[SURF-1][x]=1; }
+    // solid underground with the room carved out
+    for (let y=SURF+2; y<LH; y++) for (let x=0; x<LW; x++) map[y][x] = 1;
+    for (let y=22; y<29; y++) for (let x=16; x<29; x++) map[y][x] = 0;
+    for (let x=21; x<24; x++) map[24][x] = 1;   // exit platform, partially under the hole
+    for (let x=22; x<25; x++) map[15][x] = 1;   // floating platform up to the sky room
+    // sky room, entered through the gap in its floor
+    for (let x=15; x<30; x++){ map[1][x] = 1; map[11][x] = 1; }   // ceiling + floor
+    for (let y=1; y<12; y++){ map[y][15] = 1; map[y][29] = 1; }   // side walls
+    for (let x=22; x<25; x++) map[11][x] = 0;                     // entry gap in the floor
+    plantTree(0, SURF, 4);       // both map edges get a tree instead of an invisible wall
+    plantTree(LW-1, SURF-1, 3);
+  }
+  // sandbox3 castle courtyard: stone walls (6, drawn with the wall tile) box the
+  // map in, a two-room dungeon below, a stone tower room in the sky band, and a
+  // mid-courtyard gate wall only a double jump clears
+  function buildCastle(){
+    for (let x = 0; x < LW; x++){ map[SURF][x] = 1; map[SURF+1][x] = 1; }
+    for (let y = SURF+2; y < LH; y++) for (let x = 0; x < LW; x++) map[y][x] = 1;
+    // boundary walls, two tiles thick: stone through the surface band, then the
+    // same invisible wall (5) the trees use, so they can't be jumped from anywhere
+    for (const x of [0, 1, LW-2, LW-1]){
+      for (let y = 12; y < SURF; y++) map[y][x] = 6;
+      for (let y = 0; y < 12; y++) map[y][x] = 5;
+    }
+    // courtyard platforms
+    const plats = [[5,17,3],[10,15,3],[15,17,3],[22,15,3],[28,17,4],[33,15,3],[50,17,3]];
+    for (const [c,r,len] of plats) for (let i=0;i<len;i++) map[r][c+i] = 1;
+    // gate wall: 6 tiles tall, top at row 14, so only a double jump clears it
+    for (let y = 14; y < SURF; y++){ map[y][44] = 6; map[y][45] = 6; }
+    // hole down to the dungeon
+    for (let x = 22; x < 25; x++){ map[SURF][x] = 0; map[SURF+1][x] = 0; }
+    // two dungeon rooms joined by a low tunnel
+    for (let y = 22; y < 29; y++) for (let x = 17; x < 29; x++) map[y][x] = 0;
+    for (let y = 26; y < 29; y++){ map[y][29] = 0; map[y][30] = 0; }
+    for (let y = 22; y < 29; y++) for (let x = 31; x < 43; x++) map[y][x] = 0;
+    for (let x = 21; x < 24; x++) map[24][x] = 1;   // exit platform under the hole
+    // stone tower room in the sky band
+    for (let x = 15; x < 30; x++){ map[1][x] = 6; map[11][x] = 6; }   // ceiling + floor
+    for (let y = 1; y < 12; y++){ map[y][15] = 6; map[y][29] = 6; }   // side walls
+    for (let x = 22; x < 25; x++) map[11][x] = 0;                     // entry gap in the floor
+    // wall sconces, each centered on the outer wall tile it hangs from
+    TORCHES.push(
+      { x: 1.5*TILE, y: 16.4*TILE },  { x: (LW-1.5)*TILE, y: 16.4*TILE },   // boundary walls
+      { x: 44.5*TILE, y: 15.4*TILE }, { x: 45.5*TILE, y: 15.4*TILE },       // gate wall
+      { x: 16.5*TILE, y: 25.4*TILE }, { x: 43.5*TILE, y: 25.4*TILE },       // dungeon rooms
+      { x: 15.5*TILE, y: 7.4*TILE },  { x: 29.5*TILE, y: 7.4*TILE }         // tower room
+    );
+  }
+  // per-map pickup and save-station spots (tile coords)
+  const PICKUP_SPOTS = [
+    { double: [22,28], charge: [19,10], bomb: [25,10], boost: [25,28] },   // forest maps
+    { double: [19,28], charge: [18,10], bomb: [26,10], boost: [51,16] },   // castle
+  ];
+  const STATION_SPOTS = [ [[18,29],[17,11]], [[40,29],[27,11]] ];
+  // (re)build the level for a map index. Mutates the shared map array in place,
+  // so the physics closure in logic.js keeps working untouched.
+  function buildLevel(mi){
+    const castle = mi === 2;
+    for (let y = 0; y < LH; y++) map[y].fill(0);
+    TREE_CROWNS.length = 0; TORCHES.length = 0;
+    (castle ? buildCastle : buildForest)();
+    const spots = PICKUP_SPOTS[castle ? 1 : 0], stns = STATION_SPOTS[castle ? 1 : 0];
+    for (const pk of pickups){ pk.x = spots[pk.kind][0]*TILE; pk.y = spots[pk.kind][1]*TILE; }
+    for (let i = 0; i < STATIONS.length; i++){ STATIONS[i].tx = stns[i][0]; STATIONS[i].fr = stns[i][1]; }
+  }
+  buildForest();
   // collision, movement and pathfinding live in logic.js so they can be tested headlessly
   const phys = LOGIC.createPhysics({ TILE, EPS: 0.01, LW, LH, map });
   const { solid, standable, moveAxis, moveSwept, grounded, overlaps, bboxSolid } = phys;
@@ -287,15 +348,9 @@
       if (codeEntry){
         if (e.code === 'Escape'){ codeEntry = null; }
         else if (e.code === 'Backspace'){ codeEntry.text = codeEntry.text.slice(0, -1); codeEntry.err = false; }
-        else if (e.code === 'Enter' || e.code === 'NumpadEnter'){
-          const d = LOGIC.decodeSave(codeEntry.text);
-          if (d && d.version === 1 && MAPS[d.map] && !MAPS[d.map].locked && STATIONS[d.station]){
-            writeSave(d); selectedMap = d.map;
-            playSfx('select', 1.5);
-            startRun(d);
-          } else codeEntry.err = true;
-        }
-        else if (e.key && e.key.length === 1 && /[a-zA-Z0-9]/.test(e.key) && codeEntry.text.length < 8){
+        else if (e.code === 'Enter' || e.code === 'NumpadEnter'){ submitCode(); }
+        else if (e.key && e.key.length === 1 && /[a-zA-Z0-9]/.test(e.key) && codeEntry.text.length < 8 &&
+                 !e.ctrlKey && !e.metaKey){   // let Ctrl+V reach the paste handler untyped
           codeEntry.text += e.key.toUpperCase(); codeEntry.err = false;
         }
       }
@@ -313,6 +368,15 @@
     if (e.code === 'Space'){ if (!e.repeat && !paused && !notice && !gameOver && !spawnMenu) P.jumpBuf = P_JUMP_BUF; e.preventDefault(); }
   });
   addEventListener('keyup',   e => { keys[e.code] = false; });
+  // paste a save code into the Enter Code panel (Ctrl+V). Replaces what's typed;
+  // dashes, spacing, and case are forgiven the same way typed codes are
+  addEventListener('paste', e => {
+    if (!menu || !codeEntry) return;
+    const txt = (e.clipboardData || window.clipboardData).getData('text') || '';
+    const norm = txt.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
+    if (norm){ codeEntry.text = norm; codeEntry.err = false; }
+    e.preventDefault();
+  });
   // clear input on focus loss, and cancel a held charge instead of firing it blind
   addEventListener('blur', () => {
     for (const k in keys) keys[k] = false;
@@ -337,6 +401,7 @@
       startMenuMusic();
       if (codeEntry){
         if (inRect(mouse, codeBackBtn)){ playSfx('select', 1.5); codeEntry = null; }
+        else if (inRect(mouse, codeStartBtn)){ submitCode(); }
         return;   // otherwise the code panel is keyboard driven
       }
       if (mapBtns) for (let i = 0; i < MAPS.length; i++){
@@ -349,6 +414,7 @@
       return;
     }
     if (notice){
+      if (noticeCodeBtn && inRect(mouse, noticeCodeBtn)){ copySaveCode(notice.code); return; }
       if (inRect(mouse, noticeBtn)) dismissNotice();
       return;
     }
@@ -599,10 +665,30 @@
     writeSave({ version: 1, map: selectedMap, station: i, abilities: abilitiesMask() });
     hp = 99; if (hpEl) hpEl.textContent = hp;   // stations heal to full
     playSfx('select', 1.2, 0.85);
-    notice = { title: 'Game Saved', verb: 'Code', key: LOGIC.encodeSave(saveData), tail: 'restores this save' };
+    notice = { title: 'Game Saved', code: LOGIC.encodeSave(saveData) };
   }
   // pickup notification modal, pauses the game until Continue is clicked
-  let notice = null, noticeBtn = null, paused = false;
+  let notice = null, noticeBtn = null, noticeCodeBtn = null, paused = false;
+  // clicking the save code copies it; a short toast confirms. Falls back to a
+  // hidden textarea for contexts without the async clipboard API.
+  let toast = null;
+  function showToast(text){ toast = { text, until: performance.now() + 1600 }; }
+  function copySaveCode(code){
+    playSfx('select', 1.5);
+    const done = () => showToast('Code copied');
+    if (navigator.clipboard && navigator.clipboard.writeText)
+      navigator.clipboard.writeText(code).then(done, () => fallbackCopy(code, done));
+    else fallbackCopy(code, done);
+  }
+  function fallbackCopy(code, done){
+    const ta = document.createElement('textarea');
+    ta.value = code; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    let ok = false;
+    try { ok = document.execCommand('copy'); } catch (_) {}
+    document.body.removeChild(ta);
+    if (ok) done(); else showToast('Copy failed');
+  }
   let spawnMenu = false, spawnBtns = null, spawnPanel = null;
   const SPAWN_LIST = ['knight1','knight2','knight3','troll1','troll2','troll3',
                       'skel1','skel2','skel3','necro1','necro2','necro3',
@@ -613,7 +699,7 @@
   function spawnSpotNear(){
     const pt = Math.floor((P.x + P.w/2)/TILE);
     const pf = Math.floor((P.y + P.h - 1)/TILE) + 1;
-    const pband = bandOf(P.y + P.h/2);
+    const pband = effBand(P.x + P.w/2, P.y + P.h/2);
     function spotAt(col){
       if (col < 1 || col > LW - 2) return null;
       let best = null;
@@ -636,18 +722,29 @@
     const w = Math.round(0.6*TILE), h = Math.round(1.125*TILE);
     const e = makeEnemy(type, sp.col*TILE + Math.round((TILE - w)/2), sp.row*TILE - h);
     e.aggro = true;   // menu spawns come out hunting, never loitering at their spawn
+    e.noHome = true;  // and they own no post: on de-aggro they wander where they are
     knights.push(e);
     return true;
   }
   let menu = true, quitBtn = null, resumeBtn = null;
   const menuMusic = new Audio('menu.mp3'); menuMusic.loop = true;   // created at load so it prefetches
   // map selection. sandbox2 shares sandbox1's layout for now, its own look via THEMES
-  const MAPS = [{ name: 'sandbox1', locked: false }, { name: 'sandbox2', locked: false }];
+  const MAPS = [{ name: 'sandbox1', locked: false }, { name: 'sandbox2', locked: false },
+                { name: 'sandbox3', locked: false }];
   let selectedMap = -1, mapBtns = null;   // no map picked until the player chooses one
   let godMode = false, godBtn = null;         // menu checkbox: all abilities, health refills
   let gameOver = false, gameOverBtn = null, gameOverLoadBtn = null;   // 0 hp shows the game-over screen
-  let contBtn = null, newBtn = null, codeBtn = null, codeBackBtn = null;
+  let contBtn = null, newBtn = null, codeBtn = null, codeBackBtn = null, codeStartBtn = null;
   let codeEntry = null;                       // { text, err } while the Enter Code panel is open
+  // Enter or the Start button both try to load the typed code
+  function submitCode(){
+    const d = LOGIC.decodeSave(codeEntry.text);
+    if (d && d.version === 1 && MAPS[d.map] && !MAPS[d.map].locked && STATIONS[d.station]){
+      writeSave(d); selectedMap = d.map;
+      playSfx('select', 1.5);
+      startRun(d);
+    } else codeEntry.err = true;
+  }
   let saveData = loadSave();                  // last save, kept in sync by writeSave
   const inRect = (m, b) => !!b && m.sx >= b.x && m.sx <= b.x + b.w && m.sy >= b.y && m.sy <= b.y + b.h;
   function startMenuMusic(){
@@ -780,6 +877,9 @@
     else { k.readyT = KN_READY; k.frame = 0; }
   }
   function makeEnemy(type, x, y){
+    // hx/hy is the enemy's patrol home. Menu spawns and summons set noHome and
+    // never use it, but KEEP the home logic: level-placed enemies (guard posts,
+    // future story maps) rely on it to return to their spot after a chase
     return { type, T: ETYPES[type],
       x, y, hx: x, hy: y,
       w: Math.round(0.6*TILE), h: Math.round(1.125*TILE),
@@ -789,7 +889,7 @@
       route: null, pathT: 0, routeAge: 0, lastPN: -1, settleX: null, goalHome: false, patDir: 1, patT: 0,
       jmpCd: 0, wasGround: true, jumpFrom: null, jumpFails: 0,
       lungeCd: 0, lungeT: 0, lungeDash: 0, lungeHit: false, dashPrevX: null,
-      readyT: 0, settleT: 0, wasGuard: false, reengageT: 0,
+      readyT: 0, settleT: 0, wasGuard: false, reengageT: 0, gaveUpPN: -1,
       castKind: 0, summonCd: 0, summoner: null,
       stranded: false, gaveUp: false, dead: false, dieT: 0, holdT: 0 };
   }
@@ -816,6 +916,25 @@
     if (k.T.boltLevel && Math.abs(dy) < 0.35*TILE){ vx = (dx < 0 ? -1 : 1)*spd; vy = 0; }
     bolts.push({ x: sx, y: sy, vx, vy, life: SEC(3), col: k.T.bolt, img: k.T.boltImg, scl: k.T.boltScale || 1 });
   }
+  // straight-line sight check from the caster's bolt origin to the player,
+  // stepping half a tile at a time. Tile 5 (invisible tree wall) lets bolts
+  // through, matching the bolt's own collision rule
+  function boltClear(k){
+    const dxp2 = (P.x + P.w/2) - (k.x + k.w/2);
+    const fdir = dxp2 < 0 ? -1 : 1;
+    const bf = k.T.meta.BOLT_FROM;
+    const sx = k.x + k.w/2 + fdir*(bf ? bf[0] : 0.55*TILE);
+    const sy = bf ? k.y + k.h + bf[1] : k.y + 0.35*k.h;
+    const tx2 = P.x + P.w/2, ty2 = P.y + P.h/2;
+    const steps = Math.max(1, Math.ceil(Math.hypot(tx2 - sx, ty2 - sy)/(TILE/2)));
+    for (let i = 1; i <= steps; i++){
+      const x = Math.floor((sx + (tx2 - sx)*i/steps)/TILE);
+      const y = Math.floor((sy + (ty2 - sy)*i/steps)/TILE);
+      const tv = map[y] ? map[y][x] : 1;
+      if (tv !== 5 && solid(x, y)) return false;
+    }
+    return true;
+  }
   function summonSkeleton(k){
     const h = Math.round(1.125*TILE), w = Math.round(0.6*TILE);
     let x = (k.summonCX != null ? k.summonCX : k.x + k.w/2 + k.face*0.9*TILE) - w/2;
@@ -824,6 +943,7 @@
     if (bboxSolid(x, y, w, h)) x = k.x + k.w/2 - w/2;   // blocked in front: rise at the caster
     const e = makeEnemy(k.T.summon, x, y);
     e.summoner = k; e.aggro = true; e.face = k.face;
+    e.noHome = true;   // summons have no post either
     knights.push(e);
   }
   function updateBolts(){
@@ -904,7 +1024,11 @@
     else if (d < 3.5*TILE) k.running = false;
     return k.running ? KN_RUN : KN_WALK;
   }
-  // patrol walk: turn at walls, edges, patrol bounds, and sometimes at random
+  // patrol walk: turn at walls, edges, patrol bounds, and sometimes at random.
+  // blocked() treats a missing floor tile ahead exactly like a wall, so a
+  // wandering/idle enemy can NEVER hop off a ledge (it might not be able to
+  // jump back up). Only aggro chases and go-home routes take drops on purpose.
+  // The ledge guard in updateKnights backs this up as a second net
   function pace(k, anchorX, ranged){
     if (--k.patT <= 0){
       k.patT = AI_REPATH_SLOW + Math.random()*AI_REPATH_SLOW;
@@ -941,14 +1065,28 @@
         if (k.dieT > 140) knights.splice(i, 1);
         continue;
       }
-      // aggro on sight in the same band and screen, dropped when the player leaves the band
-      const sameBand = bandOf(P.y + P.h/2) === bandOf(k.y + k.h/2);
+      // aggro on sight in the same band and screen, dropped when the player
+      // truly leaves the band (effBand ignores brief airtime over open ground).
+      // A knight who gave up on an unreachable player doesn't stare forever: he
+      // wanders, and re-engages the moment the player moves somewhere new
+      // (different ground node) or becomes reachable
+      const sameBand = effBand(P.x + P.w/2, P.y + P.h/2) === effBand(k.x + k.w/2, k.y + k.h/2);
       const sameScreen = sameBand && Math.floor((P.x + P.w/2)/VIEW_W) === Math.floor((k.x + k.w/2)/VIEW_W);
-      // once he gives up on an unreachable player he re-engages only when a path exists.
-      // that path test floods the grid, so throttle it instead of running it every frame
       let canEngage = k.aggro || !k.gaveUp;
-      if (!canEngage && sameScreen && --k.reengageT <= 0){ k.reengageT = AI_REPATH; canEngage = routeTo(k, P).ok; }
-      if (sameScreen && canEngage) k.aggro = true;
+      if (!canEngage && sameScreen){
+        const pn2 = P.onGround ? groundNode(P) : pLastNode;
+        // wake only for a spot he can actually reach: a node change (or the
+        // slow periodic recheck) runs the path test, and a new-but-still-
+        // unreachable spot is remembered so the grid isn't flooded every frame
+        if (pn2 !== k.gaveUpPN || --k.reengageT <= 0){
+          k.reengageT = AI_REPATH;
+          // reachable on foot, or (for casters) hittable with a bolt: either wakes him
+          canEngage = routeTo(k, P).ok ||
+                      (k.T.caster && Math.hypot((P.x + P.w/2) - (k.x + k.w/2), (P.y + P.h/2) - (k.y + k.h/2)) <= CAST_RANGE && boltClear(k));
+          if (!canEngage) k.gaveUpPN = pn2;
+        }
+      }
+      if (sameScreen && canEngage){ k.aggro = true; k.gaveUp = false; }
       else if (!sameBand) k.aggro = false;
       if (k.atkCd > 0) k.atkCd--;
       if (k.summonCd > 0) k.summonCd--;
@@ -1019,6 +1157,11 @@
       } else {
         const dist = Math.abs(dxp);
         const level = Math.abs((P.y + P.h) - (k.y + k.h)) < 1.5*TILE;
+        // ranged enemies shoot anyone in range they can SEE, reachable or not:
+        // true 2D range plus line of sight, height difference welcome. Firing
+        // counts as engagement, so a shooting caster never hits the give-up
+        const castOK = k.T.caster && k.aggro &&
+                       Math.hypot(dxp, (P.y + P.h/2) - (k.y + k.h/2)) <= CAST_RANGE && boltClear(k);
         // the lunge commits off ledges, so only fire it when solid ground runs to the player
         let lungeClear = k.onGround && level && dist <= 6*TILE;
         if (lungeClear){
@@ -1033,7 +1176,7 @@
           k.lungeCd = KN_LUNGE_CD;
           k.face = dxp < 0 ? -1 : 1;
           k.vx = 0;
-        } else if (k.T.caster && k.aggro && level && dist <= CAST_RANGE){
+        } else if (castOK){
           // casters hold ground, a summon when one is owed, else a bolt
           k.face = dxp < 0 ? -1 : 1;
           k.vx = 0;
@@ -1071,14 +1214,23 @@
             if (k.aggro){
               const rp = routeTo(k, P);
               if (rp.ok){ k.route = rp; k.gaveUp = false; }              // reachable: chase
-              else if (k.holdT >= KN_GIVEUP){ k.aggro = false; k.gaveUp = true; }  // watched 2s, give up
+              else if (k.holdT >= KN_GIVEUP){
+                // watched long enough with no way in: wander until the player
+                // moves off this node or becomes reachable
+                k.aggro = false; k.gaveUp = true;
+                k.gaveUpPN = P.onGround ? groundNode(P) : pLastNode;
+              }
               // else: still watching, route stays null and holdT keeps climbing
             }
-            // not aggro, head home if a path exists, otherwise wander stranded
+            // not aggro: spawned/summoned enemies have no post, they just wander
+            // where they are. Placed enemies head home if a path exists
             if (!k.aggro && !k.route){
-              const rh = routeTo(k, { x: k.hx, y: k.hy, w: k.w, h: k.h });
-              if (rh.ok){ k.goalHome = true; k.route = rh; }
-              else k.stranded = true;
+              if (k.noHome) k.stranded = true;
+              else {
+                const rh = routeTo(k, { x: k.hx, y: k.hy, w: k.w, h: k.h });
+                if (rh.ok){ k.goalHome = true; k.route = rh; }
+                else k.stranded = true;
+              }
             }
           }
           const r = k.route;
@@ -1226,21 +1378,35 @@
   // a room exists where a screen band has both open space and structure
   const SCREEN_TILES_X = VIEW_W / TILE;
   const rooms = [];
-  for (let r = 0; r < SCREENS_Y; r++){
-    rooms.push([]);
-    for (let c = 0; c < SCREENS_X; c++){
-      let open = false, sol = false;
-      for (let ty = SCREEN_BANDS[r][0]; ty < SCREEN_BANDS[r][1]; ty++)
-        for (let tx = c*SCREEN_TILES_X; tx < (c+1)*SCREEN_TILES_X; tx++){
-          const mv = map[ty][tx];
-          if (mv === 0 || mv === 5) open = true;   // 5 is the invisible tree wall, not real structure
-          else sol = true;
-        }
-      rooms[r].push(open && sol);
+  function computeRooms(){
+    rooms.length = 0;
+    for (let r = 0; r < SCREENS_Y; r++){
+      rooms.push([]);
+      for (let c = 0; c < SCREENS_X; c++){
+        let open = false, sol = false;
+        for (let ty = SCREEN_BANDS[r][0]; ty < SCREEN_BANDS[r][1]; ty++)
+          for (let tx = c*SCREEN_TILES_X; tx < (c+1)*SCREEN_TILES_X; tx++){
+            const mv = map[ty][tx];
+            if (mv === 0 || mv === 5) open = true;   // 5 is the invisible tree wall, not real structure
+            else sol = true;
+          }
+        rooms[r].push(open && sol);
+      }
     }
   }
+  computeRooms();
   // band of a world y (0 sky, 1 surface, 2 underground)
   function bandOf(y){ return y >= (SURF+2)*TILE ? 2 : y < (SKY_ROWS-1)*TILE ? 0 : 1; }
+  // effective band: the sky or underground band only counts if that screen
+  // column really has a room there (the same rule the camera uses). A jump arc
+  // clipping the sky band over open courtyard is still "surface", so enemies
+  // don't deaggro just because the player jumped high
+  function effBand(x, y){
+    let b = bandOf(y);
+    const col = Math.min(SCREENS_X-1, Math.max(0, Math.floor(x/VIEW_W)));
+    if (b !== 1 && !rooms[b][col]) b = 1;
+    return b;
+  }
   // the screen the player counts as being on, camera and minimap agree through this
   function screenPos(){
     const col = Math.min(SCREENS_X-1, Math.max(0, Math.floor((P.x + P.w/2)/VIEW_W)));
@@ -1577,17 +1743,32 @@
       g.fillStyle = '#5b4226';
       g.fillRect(x - s*0.12, y, s*0.24, s*0.45);
     }
-    // hills wrap at +/- one screen so the silhouette is continuous where the
+    // raised-cosine hills: crest at (cx, crestY), flanks flatten out into the
+    // ground like real hills instead of curving back under like an ellipse.
+    // Wraps at +/- one screen so the silhouette is continuous where the
     // backdrop repeats horizontally (no seam at the screen boundary)
-    const gEll = (cx, cy, rx, ry) => { for (const ox of [0, -VIEW_W, VIEW_W]){ g.beginPath(); g.ellipse(cx + ox, cy, rx, ry, 0, 0, Math.PI*2); g.fill(); } };
+    const gHill = (cx, crestY, halfW) => {
+      const bot = VIEW_H + 40;
+      for (const ox of [0, -VIEW_W, VIEW_W]){
+        g.beginPath();
+        g.moveTo(cx + ox - halfW, VIEW_H + 200);
+        for (let i = 0; i <= 48; i++){
+          const dx = -halfW + halfW*i/24;
+          const y = crestY + (bot - crestY)*(1 - Math.cos(Math.PI*Math.abs(dx)/halfW))/2;
+          g.lineTo(cx + ox + dx, y);
+        }
+        g.lineTo(cx + ox + halfW, VIEW_H + 200);
+        g.closePath(); g.fill();
+      }
+    };
     // ground (hills + pines) rides up per room so it meets that room's floor; the
     // sky and clouds stay put, so the empty gap between them just shrinks
     g.save(); g.translate(0, -R);
     g.fillStyle = '#69a857';
-    gEll(700, VIEW_H + 60, 420, 260);
+    gHill(700, 440, 560);
     hillPine(640, 470, 26); hillPine(820, 500, 32); hillPine(930, 545, 24);
     g.fillStyle = '#7fbf6a';
-    gEll(180, VIEW_H + 40, 340, 220);
+    gHill(180, 460, 500);
     hillPine(90, 505, 30); hillPine(230, 490, 36); hillPine(340, 545, 26);
     g.restore();
     return cv;
@@ -1610,19 +1791,54 @@
     g.beginPath(); g.arc(160, 90, 30, 0, Math.PI*2); g.fill();
     // everything below the moon (hills, chapel, gravestones, fog) rides up per room
     g.save(); g.translate(0, -R);
-    // hills wrap at +/- one screen so they stay continuous where the backdrop
-    // repeats horizontally (this is the seam the graveyard sky used to show)
-    const gEll = (cx, cy, rx, ry) => { for (const ox of [0, -VIEW_W, VIEW_W]){ g.beginPath(); g.ellipse(cx + ox, cy, rx, ry, 0, 0, Math.PI*2); g.fill(); } };
+    // raised-cosine hills like the day backdrop: flanks flatten out into the
+    // ground instead of curving back under like an ellipse. Wraps at +/- one
+    // screen so they stay continuous where the backdrop repeats horizontally
+    // (this is the seam the graveyard sky used to show)
+    const gHill = (cx, crestY, halfW) => {
+      const bot = VIEW_H + 40;
+      for (const ox of [0, -VIEW_W, VIEW_W]){
+        g.beginPath();
+        g.moveTo(cx + ox - halfW, VIEW_H + 200);
+        for (let i = 0; i <= 48; i++){
+          const dx = -halfW + halfW*i/24;
+          const y = crestY + (bot - crestY)*(1 - Math.cos(Math.PI*Math.abs(dx)/halfW))/2;
+          g.lineTo(cx + ox + dx, y);
+        }
+        g.lineTo(cx + ox + halfW, VIEW_H + 200);
+        g.closePath(); g.fill();
+      }
+    };
     g.fillStyle = '#141a1c';
-    gEll(180, 642, 380, 210);
-    gEll(470, 690, 380, 225);   // mid rise fills the hard valley left of the chapel
-    gEll(800, 677, 380, 215);
-    // chapel silhouette on the far hill
+    gHill(180, 432, 480);
+    gHill(470, 458, 480);   // mid rise fills the hard valley left of the chapel
+    gHill(800, 455, 480);
+    gHill(655, 493, 340);   // gentle knoll under the chapel, fills the saddle to ~503
+    // chapel silhouette on the far hill: gabled body, bell tower, concave
+    // witch-hat roof with the cross planted right on the peak
     g.fillStyle = '#0e1214';
-    g.fillRect(610, 435, 90, 70);
-    g.beginPath(); g.moveTo(604, 435); g.lineTo(706, 435); g.lineTo(655, 405); g.closePath(); g.fill();
-    g.fillRect(644, 365, 22, 70);
-    g.beginPath(); g.moveTo(640, 365); g.lineTo(670, 365); g.lineTo(655, 330); g.closePath(); g.fill();
+    g.fillRect(605, 448, 100, 67);                                                                       // body, base y=515
+    g.beginPath(); g.moveTo(601, 448); g.lineTo(709, 448); g.lineTo(655, 413); g.closePath(); g.fill();  // gable roof
+    g.fillRect(641, 388, 28, 60);                                                                        // bell tower
+    // witch-hat roof: the curve stops at a flat 4px peak column so the cross
+    // upright continues it exactly, one clean centered line, no lumpy tip
+    g.beginPath();
+    for (let i = 0; i <= 10; i++){
+      const t = 0.736*i/10;
+      const hx = 655 - Math.max(2, 22*Math.pow(1-t, 1.8)), hy = 392 - 44*t;
+      if (i === 0) g.moveTo(hx, hy); else g.lineTo(hx, hy);
+    }
+    for (let i = 10; i >= 0; i--){
+      const t = 0.736*i/10;
+      g.lineTo(655 + Math.max(2, 22*Math.pow(1-t, 1.8)), 392 - 44*t);
+    }
+    g.closePath(); g.fill();
+    g.fillRect(653, 333, 4, 30);                                                                         // cross upright, runs into the peak column
+    g.fillRect(646, 340, 18, 5);                                                                         // cross arm
+    // the chapel base melts into the hill color instead of ending on a hard edge
+    const cf = g.createLinearGradient(0, 462, 0, 517);
+    cf.addColorStop(0, 'rgba(20,26,28,0)'); cf.addColorStop(1, 'rgba(20,26,28,1)');
+    g.fillStyle = cf; g.fillRect(596, 462, 118, 55);
     // gravestones
     g.fillStyle = '#1e2626';
     for (const gx of [200, 300, 770, 860]){
@@ -1658,10 +1874,238 @@
   }
   const BG_NIGHT_R = ROOM_RAISE.map(makeNightBG);
   const BG_NIGHT = BG_NIGHT_R[0];
+  // sandbox3 backdrop: courtyard curtain wall with the keep behind it, in the
+  // granite palette of the castle tiles. Painted once per region raise; only the
+  // pennant and the two sconce flames animate (drawCastleFx, over the bake).
+  const CASTLE_FX = [{ x: 250, y: 494 }, { x: 710, y: 494 }];   // baked sconce brackets, door height
+  const CASTLE_POLE = { x: 480, top: 104 };                     // pennant anchor
+  function makeCastleBG(R){
+    const cv = document.createElement('canvas');
+    cv.width = VIEW_W; cv.height = VIEW_H;
+    const g = cv.getContext('2d');
+    const W = VIEW_W, H = VIEW_H;
+    const WALL_M = '#989aa0', WALL_D = '#787a80', LINE = '#70727a';
+    const KEEP = '#86888e', KEEP_D = '#76787e', KEEP_L = '#94969c';
+    const ROOF = '#566884', ROOF_D = '#4a5a74', ROOF_L = '#627492';
+    const SLOT = '#34363c', WOOD = '#604a34', WOOD_D = '#483728';
+    const grad = g.createLinearGradient(0, 0, 0, H);
+    grad.addColorStop(0, '#4e9fe0'); grad.addColorStop(0.7, '#a8d8f4'); grad.addColorStop(1, '#cdeffc');
+    g.fillStyle = grad; g.fillRect(0, 0, W, H);
+    function cloud(cx, cy, s){
+      g.fillStyle = 'rgba(178,205,228,0.9)';
+      for (const q of [[-0.8,0.22,0.5],[0,0.28,0.72],[0.85,0.22,0.55]]){
+        g.beginPath(); g.ellipse(cx + q[0]*s, cy + q[1]*s, q[2]*s, q[2]*s*0.5, 0, 0, Math.PI*2); g.fill();
+      }
+      g.fillStyle = 'rgba(255,255,255,0.95)';
+      for (const q of [[-1.15,0.05,0.42],[-0.6,-0.28,0.58],[0,-0.42,0.72],[0.55,-0.2,0.6],[1.1,0.05,0.45],[0,0.05,0.9]]){
+        g.beginPath(); g.ellipse(cx + q[0]*s, cy + q[1]*s, q[2]*s, q[2]*s*0.62, 0, 0, Math.PI*2); g.fill();
+      }
+    }
+    cloud(150, 80, 40); cloud(560, 60, 36); cloud(840, 120, 44);
+    // everything below rides up per room like the day hills
+    g.save(); g.translate(0, -R);
+    function crenel(x0, x1, y, hgt, col, tooth, gap){
+      g.fillStyle = col;
+      for (let x = x0; x < x1; x += tooth + gap) g.fillRect(x, y - hgt, Math.min(tooth, x1 - x), hgt);
+    }
+    // slate-shingled cone roof (same texture idea as the tile shingles)
+    function coneRoof(ax, ay, by, half){
+      g.fillStyle = ROOF;
+      g.beginPath(); g.moveTo(ax - half, by); g.lineTo(ax + half, by); g.lineTo(ax, ay); g.closePath(); g.fill();
+      const hgt = by - ay;
+      g.fillStyle = ROOF_D;
+      let ri = 0;
+      for (let y = ay + 8; y < by - 2; y += 11, ri++){
+        const w2 = half*(y - ay)/hgt - 2;
+        if (w2 <= 2) continue;
+        g.fillRect(ax - w2, y, 2*w2, 2);
+        for (let x = ax - w2 + (ri % 2 ? 4 : 0); x < ax + w2; x += 9){
+          const nw = half*(Math.min(y + 11, by) - ay)/hgt - 2;
+          if (Math.abs(x - ax) < nw) g.fillRect(x, y, 1, Math.min(8, by - 2 - y));
+        }
+      }
+      g.strokeStyle = ROOF_L; g.lineWidth = 2;
+      g.beginPath(); g.moveTo(ax, ay); g.lineTo(ax - half, by); g.stroke();
+    }
+    // tiny deterministic PRNG so the baked ivy never changes between loads
+    function sRand(seed){
+      let s2 = seed >>> 0;
+      return () => {
+        s2 = (s2 + 0x6D2B79F5) >>> 0;
+        let t = Math.imul(s2 ^ (s2 >>> 15), 1 | s2);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+    function ivyFall(x, top, ln){
+      const rnd = sRand(x*7 + ln), cols = ['#4a8c42', '#366e3a', '#30542c'];
+      for (let i = 0; i < ln; i++){
+        const yy = top + i*9, w2 = Math.max(0, 14*(1 - i/(ln*1.15)));
+        for (let k = 0; k < 3; k++){
+          const lx = x + Math.floor(rnd()*(2*Math.floor(w2) + 1)) - Math.floor(w2);
+          g.fillStyle = cols[Math.floor(rnd()*3)];
+          g.beginPath(); g.ellipse(lx, yy, 5, 4, 0, 0, Math.PI*2); g.fill();
+        }
+      }
+    }
+    const kx = 480;
+    // flag pole first so the keep occludes its base (the pennant animates live)
+    g.fillStyle = '#60626a'; g.fillRect(kx-6, 104, 12, 146);
+    g.fillStyle = '#6e7076'; g.fillRect(kx-6, 104, 4, 146);
+    // two tall side towers with full ashlar blockwork
+    for (const [tx, th2] of [[240, 500], [720, 530]]){
+      g.fillStyle = WALL_D; g.fillRect(tx-48, H-th2, 96, th2+200);
+      g.fillStyle = '#64666c'; g.fillRect(tx+38, H-th2, 10, th2+200);
+      const bands = [];
+      for (let by = H-th2+10; by < 356; by += 31) bands.push(by);
+      g.fillStyle = '#72747a';
+      bands.forEach((by, bi) => {
+        if (bi % 3 !== 1) return;
+        for (let jx = tx-36+(bi % 2 ? 15 : 0); jx < tx+24; jx += 60) g.fillRect(jx, by, 29, 31);
+      });
+      g.fillStyle = '#6c6e74';
+      bands.forEach((by, bi) => {
+        g.fillRect(tx-48, by, 96, 1);
+        for (let jx = tx-36+(bi % 2 ? 15 : 0); jx < tx+42; jx += 30) g.fillRect(jx, by, 1, Math.min(31, 355 - by));
+      });
+      g.fillStyle = '#64666c';
+      for (let cx2 = tx-45; cx2 < tx+42; cx2 += 12) g.fillRect(cx2, H-th2+2, 6, 8);   // corbels
+      coneRoof(tx, H-th2-84, H-th2, 60);
+      for (let wy2 = H-th2+50; wy2 < 340; wy2 += 90){   // framed arched windows
+        g.fillStyle = '#8c8e94';
+        g.fillRect(tx-9, wy2-4, 18, 32);
+        g.beginPath(); g.ellipse(tx, wy2-4, 9, 8, 0, 0, Math.PI*2); g.fill();
+        g.fillStyle = SLOT;
+        g.fillRect(tx-6, wy2, 12, 26);
+        g.beginPath(); g.ellipse(tx, wy2, 6, 6, 0, 0, Math.PI*2); g.fill();
+        g.fillStyle = '#64666c'; g.fillRect(tx-10, wy2+26, 20, 5);
+      }
+    }
+    // rear turrets peeking over the keep
+    for (const bx of [kx-62, kx+62]){
+      g.fillStyle = '#7e8086'; g.fillRect(bx-12, 164, 24, 46);
+      g.fillStyle = '#72747a'; g.fillRect(bx+6, 164, 6, 46);
+      g.fillStyle = '#747678';
+      for (const by of [176, 190, 204]) g.fillRect(bx-12, by, 24, 1);
+      coneRoof(bx, 136, 164, 16);
+      g.fillStyle = SLOT; g.fillRect(bx-3, 178, 6, 18);
+    }
+    // connecting curtain walls between the towers and the keep
+    for (const [x0, x1] of [[288, 366], [594, 672]]){
+      g.fillStyle = '#7e8086'; g.fillRect(x0, 306, x1-x0, H+200-306);
+      crenel(x0, x1, 306, 14, '#7e8086', 14, 10);
+      g.fillStyle = LINE;
+      g.fillRect(x0, 340, x1-x0, 2);
+      for (let bi = 0; bi < 2; bi++){
+        const ya = bi ? 340 : 306, yb = bi ? 360 : 340;
+        for (let jx = x0+10+(bi ? 10 : 0); jx < x1-4; jx += 20) g.fillRect(jx, ya+2, 1, yb-ya-4);
+      }
+      g.fillStyle = SLOT; g.fillRect((x0+x1)/2 - 4, 320, 8, 22);
+    }
+    // the keep: toned ashlar blocks first so every line sits on top
+    g.fillStyle = KEEP; g.fillRect(kx-120, 200, 240, H+200-200);
+    g.fillStyle = '#80828a';
+    for (const [bx0, by0, bh2] of [[408,246,54],[504,200,46],[432,300,48],[552,300,48],[360,200,46],[384,348,12]])
+      g.fillRect(bx0, by0, 48, bh2);
+    crenel(kx-126, kx+126, 200, 20, KEEP, 20, 14);
+    g.fillStyle = KEEP_D;
+    for (const yy of [246, 300, 348]) g.fillRect(kx-120, yy, 240, 2);
+    g.fillStyle = '#7c7e84';
+    for (let bi = 0; bi < 4; bi++){
+      const ya = [200,246,300,348][bi], yb = [246,300,348,360][bi];
+      for (let jx = 384+(bi % 2 ? 24 : 0); jx < 600; jx += 48) g.fillRect(jx, ya+2, 1, yb-ya-3);
+    }
+    g.fillStyle = KEEP_D;
+    for (let k = -3; k <= 3; k++) g.fillRect(kx + k*30 - 5, 224, 10, 10);   // machicolations
+    // corner turrets with three stacked slits
+    for (const tx2 of [kx-120, kx+120]){
+      g.fillStyle = KEEP_L; g.fillRect(tx2-18, 176, 36, H+200-176);
+      g.fillStyle = KEEP; g.fillRect(tx2+10, 176, 8, H+200-176);
+      g.fillStyle = '#8a8c92';
+      let bi = 0;
+      for (let by = 196; by < 356; by += 30, bi++){
+        g.fillRect(tx2-18, by, 36, 1);
+        g.fillRect(tx2 + (bi % 2 ? 7 : -7), by, 1, 30);
+      }
+      coneRoof(tx2, 132, 176, 24);
+      g.fillStyle = SLOT;
+      for (const wy4 of [194, 252, 310]) g.fillRect(tx2-4, wy4, 8, 26);
+    }
+    // central arched window
+    g.fillStyle = KEEP_L;
+    g.beginPath(); g.ellipse(kx, 274, 26, 26, 0, 0, Math.PI*2); g.fill();
+    g.fillRect(kx-26, 274, 52, 42);
+    g.fillStyle = '#3a4a60';
+    g.beginPath(); g.ellipse(kx, 274, 18, 18, 0, 0, Math.PI*2); g.fill();
+    g.fillRect(kx-18, 274, 36, 34);
+    g.fillStyle = KEEP_D; g.fillRect(kx-1, 260, 3, 48);
+    g.fillRect(kx-24, 308, 48, 8);
+    // cross arrow loops flanking the window
+    g.fillStyle = SLOT;
+    for (const c of [kx-64, kx+64]){ g.fillRect(c-4, 256, 8, 30); g.fillRect(c-11, 266, 22, 7); }
+    // front curtain wall: crenel + coursework periods divide 960, so the
+    // backdrop repeats with no seam. The wall ENDS at the courtyard ground
+    // line GY, which the per-room raise puts exactly at that room's floor
+    // height, same contract as the hills (bg ground meets a floor 1/2/3
+    // tiles up per region)
+    // the wall blocks run straight past the ground line, deep enough that the
+    // raise never lifts them off screen. GY only anchors what stands on the
+    // floor (doors); floor holes look down at the same wall masonry
+    const wy = 360, GY = H - 64;
+    g.fillStyle = WALL_M; g.fillRect(0, wy, W, H+200-wy);
+    crenel(-8, W+8, wy, 26, WALL_M, 24, 16);
+    g.fillStyle = LINE;
+    let r2 = 0;
+    for (let yy = wy; yy < H+160; yy += 46, r2++){
+      g.fillRect(0, yy, W, 2);
+      for (let x = (r2 % 2 ? 60 : 0); x < W+120; x += 120) g.fillRect(x, yy, 2, Math.min(46, H+160-yy));
+    }
+    // wood arch doors standing full-height on the ground line, iron bars full width
+    for (const ax of [160, 800]){
+      const top = GY - 140;   // same 140px door as the approved concept, base on the ground
+      g.fillStyle = WOOD;
+      g.fillRect(ax-42, top+44, 84, GY-(top+44));
+      g.beginPath(); g.ellipse(ax, top+44, 42, 44, 0, 0, Math.PI*2); g.fill();
+      g.strokeStyle = WOOD_D; g.lineWidth = 3;
+      g.beginPath(); g.moveTo(ax, top+12); g.lineTo(ax, GY); g.stroke();
+      g.lineWidth = 2;
+      for (const px3 of [ax-20, ax+20]){ g.beginPath(); g.moveTo(px3, top+26); g.lineTo(px3, GY); g.stroke(); }
+      g.strokeStyle = '#3c3c42'; g.lineWidth = 4;
+      for (const yy of [top+60, top+120]){ g.beginPath(); g.moveTo(ax-42, yy); g.lineTo(ax+42, yy); g.stroke(); }
+    }
+    // arrow slits + hung shields
+    g.fillStyle = SLOT;
+    for (const wx of [330, 480, 630]){
+      g.fillRect(wx-5, 430, 10, 50);
+      g.beginPath(); g.ellipse(wx, 432, 5, 10, 0, 0, Math.PI*2); g.fill();
+    }
+    for (const [sx, c1] of [[405, '#aa2832'], [555, '#284696']]){
+      g.fillStyle = c1;
+      g.beginPath(); g.moveTo(sx-20, 505); g.lineTo(sx+20, 505); g.lineTo(sx+20, 535);
+      g.lineTo(sx, 555); g.lineTo(sx-20, 535); g.closePath(); g.fill();
+      g.strokeStyle = '#dcaa3c'; g.lineWidth = 5;
+      g.beginPath(); g.moveTo(sx-20, 520); g.lineTo(sx+20, 520); g.stroke();
+    }
+    // ivy spilling over the crenellations
+    ivyFall(60, 340, 12); ivyFall(280, 344, 9); ivyFall(430, 340, 14);
+    ivyFall(700, 342, 10); ivyFall(920, 338, 13);
+    // sconce brackets (the flames animate live in drawCastleFx)
+    for (const fx2 of CASTLE_FX){
+      g.fillStyle = '#3c3024'; g.fillRect(fx2.x-3, fx2.y+4, 6, 22);
+      g.fillStyle = '#34343c'; g.fillRect(fx2.x-8, fx2.y+24, 16, 7);
+      g.fillStyle = '#484852'; g.fillRect(fx2.x-2, fx2.y+30, 4, 10);
+    }
+    g.restore();
+    return cv;
+  }
+  const BG_CASTLE_R = ROOM_RAISE.map(makeCastleBG);
+  const BG_CASTLE = BG_CASTLE_R[0];
   // per-map theme: tiles, tree colors (the crown bakes lazily per theme), backdrop, weather
   const THEMES = [
     { grass: IMG.grass,  dirt: IMG.dirt,  bark: IMG.bark,  leaf: IMG.leaf,  bg: BG,       bgR: BG_R,       rain: false, crown: null },
     { grass: IMG.ngrass, dirt: IMG.ndirt, bark: IMG.nbark, leaf: IMG.nleaf, bg: BG_NIGHT, bgR: BG_NIGHT_R, rain: true,  crown: null },
+    { grass: IMG.ccap,   dirt: IMG.cfill, bark: IMG.cwall, leaf: IMG.leaf,  bg: BG_CASTLE, bgR: BG_CASTLE_R, rain: false, crown: null,
+      wall: IMG.cwall, castle: true },
   ];
   let theme = THEMES[0];
   // storm rain, advanced on real time like the star field so speed ignores refresh rate
@@ -1690,7 +2134,58 @@
     const off = ((cam.x % VIEW_W) + VIEW_W) % VIEW_W;
     ctx.drawImage(bg, -off, 0);
     if (off) ctx.drawImage(bg, VIEW_W - off, 0);
+    if (theme.castle) drawCastleFx(off);             // pennant + sconce flames over the bake
     if (theme.rain && camRegion !== 2) drawRain();   // no rain down in the underground band
+  }
+  // shared flame flicker (backdrop sconces and level torches): four poses
+  // advanced on real time, so the flicker speed ignores the refresh rate
+  function drawFlame(x, y, ph, s){
+    const f = (Math.floor(performance.now()/140) + ph) % 4;
+    const lean = [-2, 0.5, 2, 0][f]*s, h = [20, 26, 23, 17][f]*s;
+    const gg = ctx.createRadialGradient(x, y - 9*s, 2, x, y - 9*s, 26*s);
+    gg.addColorStop(0, 'rgba(255,180,70,0.30)'); gg.addColorStop(1, 'rgba(255,180,70,0)');
+    ctx.fillStyle = gg; ctx.fillRect(x - 26*s, y - 35*s, 52*s, 52*s);
+    ctx.fillStyle = '#e05820';
+    ctx.beginPath(); ctx.moveTo(x - 6*s, y); ctx.lineTo(x + 6*s, y); ctx.lineTo(x + lean, y - h); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = '#ffe482';
+    ctx.beginPath(); ctx.moveTo(x - 3.5*s, y); ctx.lineTo(x + 3.5*s, y); ctx.lineTo(x + lean*0.6, y - h*0.62); ctx.closePath(); ctx.fill();
+  }
+  // pennant + sconce flames animate over the baked castle backdrop, tracking
+  // both the parallax offset and the per-region raise
+  function drawCastleFx(off){
+    const R = ROOM_RAISE[Math.max(0, Math.min(ROOM_RAISE.length - 1, camRegion))];
+    for (const bx of [-off, VIEW_W - off]){
+      for (const fx2 of CASTLE_FX) drawFlame(bx + fx2.x, fx2.y + 6 - R, (fx2.x/100)|0, 1);
+      // waving pennant, hoist pinned at the pole top, tip flutter grows outward
+      const px2 = bx + CASTLE_POLE.x + 6, py2 = CASTLE_POLE.top - R;
+      const phase = (performance.now() % 900) / 900;
+      const L = 54, HOIST = 13, N = 14, bot = [];
+      ctx.beginPath();
+      for (let i = 0; i < N; i++){
+        const t2 = i/(N-1);
+        const wob = 6.5*t2*Math.sin(Math.PI*2*(1.35*t2 - phase));
+        const cy2 = py2 + HOIST + wob, hh = HOIST*(1 - t2), tx2 = px2 + t2*L;
+        if (i === 0) ctx.moveTo(tx2, Math.max(py2, cy2 - hh));
+        else ctx.lineTo(tx2, Math.max(py2, cy2 - hh));
+        bot.push([tx2, cy2 + hh]);
+      }
+      for (let i = N - 1; i >= 0; i--) ctx.lineTo(bot[i][0], bot[i][1]);
+      ctx.closePath();
+      ctx.fillStyle = '#aa2832';
+      ctx.fill();
+    }
+  }
+  // wall sconces placed by the castle layout, drawn in world space
+  function drawTorches(){
+    for (const tc of TORCHES){
+      const x = tc.x - cam.x, y = tc.y - cam.y;
+      if (x < -TILE || x > VIEW_W + TILE || y < -TILE*1.5 || y > VIEW_H + TILE) continue;
+      ctx.fillStyle = '#7a5632'; ctx.fillRect(x - 3, y + 2, 6, 17);   // wood shaft
+      ctx.fillStyle = '#5e4226'; ctx.fillRect(x, y + 2, 3, 17);
+      ctx.fillStyle = '#56565e'; ctx.fillRect(x - 6, y - 5, 12, 3);   // iron collar
+      ctx.fillStyle = '#3a3a42'; ctx.fillRect(x - 8, y - 3, 16, 6);   // cup
+      drawFlame(x, y - 4, (tc.x/64)|0, 1);
+    }
   }
   // cloud crown, drawn in front of the player and arrows, pinned into the trunk top.
   // Baked once per theme (theme.crown) from that theme's leaf tile.
@@ -1800,9 +2295,11 @@
     const y0 = Math.floor(cam.y/TILE), y1 = Math.floor((cam.y+VIEW_H)/TILE);
     for (let ty=y0; ty<=y1; ty++) for (let tx=x0; tx<=x1; tx++){
       const v = (ty>=0 && ty<LH && tx>=0 && tx<LW) ? map[ty][tx] : 0;
-      if (!v || v >= 3) continue;   // the crown draws the leaf cells
+      if (!v || (v >= 3 && v !== 6)) continue;   // the crown draws the leaf cells
       const sx = tx*TILE - cam.x, sy = ty*TILE - cam.y;
-      ctx.drawImage(v === 2 ? theme.bark : (!solid(tx,ty-1) ? theme.grass : theme.dirt), sx, sy);
+      ctx.drawImage(v === 6 ? (theme.wall || theme.bark)
+                  : v === 2 ? theme.bark
+                  : (!solid(tx,ty-1) ? theme.grass : theme.dirt), sx, sy);
     }
   }
   function drawPickups(){
@@ -1865,18 +2362,25 @@
     ctx.fillText(' ' + tail, lx, ly);
   }
   function drawNotice(){
-    noticeBtn = null;
+    noticeBtn = null; noticeCodeBtn = null;
     if (!notice) return;
     ctx.fillStyle = 'rgba(6,8,12,0.5)';
     ctx.fillRect(0, 0, VIEW_W, VIEW_H);
     const cx2 = VIEW_W/2, cy2 = VIEW_H/2;
     const f1 = 'bold ' + Math.round(5.5*U) + 'px ui-monospace, Menlo, Consolas, monospace';
     const f2 = Math.round(3.5*U) + 'px ui-monospace, Menlo, Consolas, monospace';
+    const f3 = 'bold ' + Math.round(6*U) + 'px ui-monospace, Menlo, Consolas, monospace';
     ctx.textBaseline = 'middle';
     ctx.font = f1;
     const tw = ctx.measureText(notice.title).width;
-    ctx.font = f2;
-    const lw = ctx.measureText(notice.verb + ' ').width + ctx.measureText(notice.key).width + 4*U + ctx.measureText(' ' + notice.tail).width;
+    let lw;
+    if (notice.code){
+      ctx.font = f3;
+      lw = ctx.measureText(notice.code).width + 8*U;
+    } else {
+      ctx.font = f2;
+      lw = ctx.measureText(notice.verb + ' ').width + ctx.measureText(notice.key).width + 4*U + ctx.measureText(' ' + notice.tail).width;
+    }
     const w = Math.max(tw, lw) + 16*U, h = 36*U;
     ctx.fillStyle = 'rgba(14,16,19,0.94)';
     roundRect(cx2 - w/2, cy2 - h/2, w, h, 2*U); ctx.fill();
@@ -1886,8 +2390,22 @@
     ctx.font = f1;
     ctx.fillStyle = '#e8ecf0';
     ctx.fillText(notice.title, cx2, cy2 - 11*U);
-    ctx.font = f2;
-    keycapLine(cx2, cy2 - 2*U, notice.verb, notice.key, notice.tail);
+    if (notice.code){
+      // the code itself is the whole message: a click copies it
+      const kw = lw, kh = 9*U, kx2 = cx2 - kw/2, ky2 = cy2 - 6.5*U;
+      const hovC = mouse.sx >= kx2 && mouse.sx <= kx2 + kw && mouse.sy >= ky2 && mouse.sy <= ky2 + kh;
+      ctx.fillStyle = hovC ? 'rgba(96,224,208,0.22)' : 'rgba(24,120,120,0.14)';
+      roundRect(kx2, ky2, kw, kh, U); ctx.fill();
+      ctx.strokeStyle = hovC ? '#d9fff8' : '#60e0d0';
+      roundRect(kx2, ky2, kw, kh, U); ctx.stroke();
+      ctx.font = f3;
+      ctx.fillStyle = hovC ? '#eafffb' : '#60e0d0';
+      ctx.fillText(notice.code, cx2, ky2 + kh/2);
+      noticeCodeBtn = { x: kx2, y: ky2, w: kw, h: kh };
+    } else {
+      ctx.font = f2;
+      keycapLine(cx2, cy2 - 2*U, notice.verb, notice.key, notice.tail);
+    }
     const bw2 = 24*U, bh2 = 7*U, bx = cx2 - bw2/2, by = cy2 + 6*U;
     const hov = mouse.sx >= bx && mouse.sx <= bx + bw2 && mouse.sy >= by && mouse.sy <= by + bh2;
     ctx.fillStyle = hov ? 'rgba(96,224,208,0.35)' : 'rgba(24,120,120,0.28)';
@@ -1899,6 +2417,23 @@
     ctx.fillStyle = hov ? '#eafffb' : '#60e0d0';
     ctx.fillText('Continue', cx2, by + bh2/2);
     noticeBtn = { x: bx, y: by, w: bw2, h: bh2 };
+    ctx.textAlign = 'start'; ctx.textBaseline = 'alphabetic';
+  }
+  function drawToast(){
+    if (!toast) return;
+    const left = toast.until - performance.now();
+    if (left <= 0){ toast = null; return; }
+    ctx.globalAlpha = Math.min(1, left/400);   // fade out over the last 0.4s
+    ctx.font = 'bold ' + Math.round(3.5*U) + 'px ui-monospace, Menlo, Consolas, monospace';
+    const w = ctx.measureText(toast.text).width + 8*U, h = 8*U;
+    const x = VIEW_W/2 - w/2, y = VIEW_H - 26*U;
+    ctx.fillStyle = 'rgba(14,16,19,0.95)';
+    roundRect(x, y, w, h, 2*U); ctx.fill();
+    ctx.strokeStyle = '#60e0d0'; ctx.lineWidth = 1.5;
+    roundRect(x, y, w, h, 2*U); ctx.stroke();
+    ctx.fillStyle = '#d9fff8'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.fillText(toast.text, VIEW_W/2, y + h/2);
+    ctx.globalAlpha = 1; ctx.lineWidth = 1;
     ctx.textAlign = 'start'; ctx.textBaseline = 'alphabetic';
   }
   const MONO = 'px ui-monospace, Menlo, Consolas, monospace';
@@ -2059,7 +2594,11 @@
     const dt = cometLastT ? Math.min(80, t - cometLastT) : 7;
     cometLastT = t;
     for (const st of STARS){
-      st.x += 0.0216 * dt; if (st.x > VIEW_W) st.x = 0;
+      // wrap only once the whole glow has cleared the edge, so stars slide off
+      // instead of popping out while still partly visible
+      st.x += 0.0216 * dt;
+      const sm = st.r*2 + 2;
+      if (st.x > VIEW_W + sm) st.x = -sm;
       const tw = 0.35 + 0.65*Math.abs(Math.sin(t*0.001*st.sp + st.ph));
       ctx.fillStyle = 'rgba(150,205,255,' + tw.toFixed(2) + ')';
       ctx.beginPath(); ctx.arc(st.x, st.y, st.r*(0.7 + 0.5*tw), 0, Math.PI*2); ctx.fill();
@@ -2084,7 +2623,7 @@
   }
   function drawMenuBg(){ drawStarField(); }
   function drawMenu(){
-    mapBtns = null; godBtn = null; contBtn = null; newBtn = null; codeBtn = null; codeBackBtn = null;
+    mapBtns = null; godBtn = null; contBtn = null; newBtn = null; codeBtn = null; codeBackBtn = null; codeStartBtn = null;
     if (!menu) return;
     drawMenuBg();   // dark twinkling-star backdrop
     const cx2 = VIEW_W/2, cy2 = VIEW_H/2;
@@ -2094,7 +2633,7 @@
     ctx.fillText('ARROWVANIA', cx2, cy2 - 24*U);
     ctx.restore();
     const mw = 30*U, mh = 9*U, mgap = 4*U;
-    const mx0 = cx2 - mw - mgap/2, my0 = cy2 - 9*U;
+    const mx0 = cx2 - (MAPS.length*mw + (MAPS.length-1)*mgap)/2, my0 = cy2 - 9*U;
     mapBtns = [];
     for (let i = 0; i < MAPS.length; i++){
       const b = { x: mx0 + i*(mw + mgap), y: my0, w: mw, h: mh };
@@ -2135,9 +2674,12 @@
       ctx.fillText(shown + (raw.length < 8 ? caret : ''), cx2, iby + ibh/2);
       ctx.font = Math.round(3.2*U) + MONO;
       if (codeEntry.err){ ctx.fillStyle = '#ff6a55'; ctx.fillText('invalid code', cx2, py2 + 20.5*U); }
-      const cbw = 30*U, cbh = 8.5*U;
-      menuButton(cx2 - cbw/2, py2 + 23*U, cbw, cbh, 'Back', false);
-      codeBackBtn = { x: cx2 - cbw/2, y: py2 + 23*U, w: cbw, h: cbh };
+      // Back pinned left, Start pinned right on the same line. Enter also starts
+      const cbw = 26*U, cbh = 8.5*U, cby = py2 + 23*U;
+      menuButton(px2 + 4*U, cby, cbw, cbh, 'Back', false);
+      codeBackBtn = { x: px2 + 4*U, y: cby, w: cbw, h: cbh };
+      menuButton(px2 + pw - 4*U - cbw, cby, cbw, cbh, 'Start', false);
+      codeStartBtn = { x: px2 + pw - 4*U - cbw, y: cby, w: cbw, h: cbh };
       ctx.lineWidth = 1;
       ctx.textAlign = 'start'; ctx.textBaseline = 'alphabetic';
       return;
@@ -2584,7 +3126,7 @@
   function render(){
     ctx.setTransform(SCALE,0,0,SCALE,0,0);
     ctx.lineWidth = 1;   // menu/pause buttons stroke at 1.5, don't let it leak into the world's strokes
-    drawBackground(); drawTiles(); drawStuck(); drawPickups(); drawStations(); drawKnights(); drawSummonRise(); drawKFx(); drawBolts(); drawArrows(); drawFX(); drawBoostFx(); drawPlayer(); drawChargeFx(); drawBombs(); drawCrowns(); drawHUD(); drawDebug(); drawNotice(); drawSpawnMenu(); drawPaused(); drawGameOver(); drawMenu();
+    drawBackground(); drawTiles(); drawTorches(); drawStuck(); drawPickups(); drawStations(); drawKnights(); drawSummonRise(); drawKFx(); drawBolts(); drawArrows(); drawFX(); drawBoostFx(); drawPlayer(); drawChargeFx(); drawBombs(); drawCrowns(); drawHUD(); drawDebug(); drawNotice(); drawSpawnMenu(); drawPaused(); drawGameOver(); drawToast(); drawMenu();
   }
 
   // ---------- responsive fit ----------
@@ -2626,6 +3168,7 @@
   // leave the menu and begin a run, fresh or from a save station
   function startRun(save){
     menu = false; stopMenuMusic(); codeEntry = null;
+    buildLevel(selectedMap); computeRooms();   // castle vs forest geometry per map
     theme = THEMES[selectedMap] || THEMES[0];
     if (save){
       applyAbilities(save.abilities);
@@ -2686,7 +3229,7 @@
   const LOADING_MIN_MS = 2000;
   const loadingStart = performance.now();
   const loadingEl = document.getElementById('loading-overlay');
-  const imgKeys = ['archer','bowarm','grass','dirt','arrow','bark','leaf','knight','ngrass','ndirt','nbark','nleaf'].concat(['knight2','knight3','troll1','troll2','troll3','skel1','skel2','skel3','necro1','necro2','necro3',
+  const imgKeys = ['archer','bowarm','grass','dirt','arrow','bark','leaf','knight','ngrass','ndirt','nbark','nleaf','ccap','cfill','cwall'].concat(['knight2','knight3','troll1','troll2','troll3','skel1','skel2','skel3','necro1','necro2','necro3',
     'orc1','orc2','orc3','elf1','elf2','elf3','warrior1','warrior2','warrior3','pirate1','pirate2','pirate3',
     'elf1_bolt','warrior3_bolt','pirate2_bolt']);
   const imagesReady = Promise.all(imgKeys.map(k => new Promise(res => {
