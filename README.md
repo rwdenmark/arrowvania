@@ -28,7 +28,7 @@ A/D move, Space jump, S to crouch, Shift to dash, Q drops bombs, left click aims
 
 ## Enemies
 
-Twelve enemy types share one chassis with knight-1 stats: knights 1-3, trolls 1-3, skeletons 1-3, and necromancers 1-3. Only knight 1 has the lunge. Necromancers fight from range with a bolt and summon their matching skeleton (one owed every 8s, two alive per caster). The level starts empty, spawn enemies with the 1 menu. `assets/build_enemies.py` rebakes the eleven new sheets from the craftpix knight, trolls, and necromancer zips into one asset file per family.
+Twenty-four enemy types share one chassis with knight-1 stats: knights 1-3, trolls 1-3, skeletons 1-3, necromancers 1-3, orcs 1-3, elves 1-3, warriors 1-3, and pirates 1-3. Only knight 1 has the lunge. Necromancers fight from range with a bolt and summon their matching skeleton (one owed every 8s, two alive per caster). Elf 1, elf 3, warrior 3, and pirate 2 are also ranged and fire a bolt of their own. The level starts empty, spawn enemies with the 1 menu. `assets/build_enemies.py` rebakes all the sheets from the seven craftpix zips into one asset file per family.
 
 ## Assets
 

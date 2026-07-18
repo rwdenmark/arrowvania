@@ -23,7 +23,9 @@
                 bark: img(ASSETS.bark), leaf: img(ASSETS.leaf), knight: img(ASSETS.knight),
                 ngrass: img(ASSETS.night_grass), ndirt: img(ASSETS.night_dirt),
                 nbark: img(ASSETS.night_bark), nleaf: img(ASSETS.night_leaf) };
-  for (const ek of ['knight2','knight3','troll1','troll2','troll3','skel1','skel2','skel3','necro1','necro2','necro3']) IMG[ek] = img(ASSETS[ek]);
+  for (const ek of ['knight2','knight3','troll1','troll2','troll3','skel1','skel2','skel3','necro1','necro2','necro3',
+                  'orc1','orc2','orc3','elf1','elf2','elf3','warrior1','warrior2','warrior3','pirate1','pirate2','pirate3',
+                  'elf1_bolt','warrior3_bolt','pirate2_bolt']) IMG[ek] = img(ASSETS[ek]);
   // sheet is baked at SS x resolution, all ASSETS pixel metadata is in sheet px
   const SS = ASSETS.SPRITE_SCALE || 1;
   const FW = ASSETS.FRAME_W, FH = ASSETS.FRAME_H, NF = ASSETS.FRAMES;
@@ -287,7 +289,7 @@
         else if (e.code === 'Backspace'){ codeEntry.text = codeEntry.text.slice(0, -1); codeEntry.err = false; }
         else if (e.code === 'Enter' || e.code === 'NumpadEnter'){
           const d = LOGIC.decodeSave(codeEntry.text);
-          if (d && MAPS[d.map] && !MAPS[d.map].locked && STATIONS[d.station]){
+          if (d && d.version === 1 && MAPS[d.map] && !MAPS[d.map].locked && STATIONS[d.station]){
             writeSave(d); selectedMap = d.map;
             playSfx('select', 1.5);
             startRun(d);
@@ -303,12 +305,12 @@
       if (spawnMenu) spawnMenu = false;
       else { paused = !paused; if (!paused){ P.jumpBuf = 0; cancelStaleCharge(); } }
     }
-    if (e.code === 'Digit2') debugAI = !debugAI;   // enemy info overlay, was F3
-    if (e.code === 'Digit1' && !e.repeat && !paused && !notice && !gameOver) spawnMenu = !spawnMenu;
-    if (e.code === 'KeyQ' && !e.repeat && !paused && !notice && !gameOver) tryDropBomb();
-    if ((e.code === 'ShiftLeft' || e.code === 'ShiftRight') && !e.repeat && !paused && !notice && !gameOver) tryDash();
+    if (e.code === 'Digit2' && !e.repeat && !paused && !notice && !gameOver && !spawnMenu) debugAI = !debugAI;   // enemy info overlay, was F3
+    if (e.code === 'Digit1' && !e.repeat && !paused && !notice && !gameOver){ spawnMenu = !spawnMenu; if (spawnMenu) P.jumpBuf = 0; }
+    if (e.code === 'KeyQ' && !e.repeat && !paused && !notice && !gameOver && !spawnMenu) tryDropBomb();
+    if ((e.code === 'ShiftLeft' || e.code === 'ShiftRight') && !e.repeat && !paused && !notice && !gameOver && !spawnMenu) tryDash();
     if (e.code === 'KeyS' && P.boost) P.boost = false;   // press S to stop the speed booster immediately
-    if (e.code === 'Space'){ if (!e.repeat && !paused && !notice && !gameOver) P.jumpBuf = P_JUMP_BUF; e.preventDefault(); }
+    if (e.code === 'Space'){ if (!e.repeat && !paused && !notice && !gameOver && !spawnMenu) P.jumpBuf = P_JUMP_BUF; e.preventDefault(); }
   });
   addEventListener('keyup',   e => { keys[e.code] = false; });
   // clear input on focus loss, and cancel a held charge instead of firing it blind
@@ -603,7 +605,9 @@
   let notice = null, noticeBtn = null, paused = false;
   let spawnMenu = false, spawnBtns = null, spawnPanel = null;
   const SPAWN_LIST = ['knight1','knight2','knight3','troll1','troll2','troll3',
-                      'skel1','skel2','skel3','necro1','necro2','necro3'];
+                      'skel1','skel2','skel3','necro1','necro2','necro3',
+                      'orc1','orc2','orc3','elf1','elf2','elf3',
+                      'warrior1','warrior2','warrior3','pirate1','pirate2','pirate3'];
   // spawn placement: 6 tiles ahead, else 6 behind, else the nearest standable
   // column about 6 tiles out. standable() already demands two clear tiles above
   function spawnSpotNear(){
@@ -684,8 +688,8 @@
   const KN_READY = SEC(0.12), KN_SETTLE = SEC(0.07);
   // ---------- enemy roster ----------
   // every enemy runs on the knight-1 chassis with the same stats. Only knight 1
-  // keeps the lunge, the necromancers swap melee for the caster kit
-  const CAST_RANGE = 6*TILE;                     // necromancers fight from range
+  // keeps the lunge. Casters swap melee for a bolt, necromancers also summon
+  const CAST_RANGE = 6*TILE;                     // casters fight from range
   const SUMMON_CD = SEC(8), SUMMON_MAX = 2;      // one summon owed every 8s, 2 alive per caster
   const ETYPES = {
     knight1: { img: 'knight', meta: KN, cx: KN_CX, name: 'Knight 1', seq: KN_ATK_SEQ, entry: [0, 1], lunge: true },
@@ -695,6 +699,16 @@
     necro1: { img: 'necro1', caster: true, summon: 'skel1', bolt: '#4db8ff' },
     necro2: { img: 'necro2', caster: true, summon: 'skel2', bolt: '#7ef07e' },
     necro3: { img: 'necro3', caster: true, summon: 'skel3', bolt: '#ff6a5e' },
+    orc1: { img: 'orc1', dmg: [7, 9] }, orc2: { img: 'orc2', dmg: [8, 9] },
+    orc3: { img: 'orc3', dmg: [7, 9] },
+    elf1: { img: 'elf1', caster: true, boltImg: 'elf1_bolt', boltLevel: true, castFrame: 7 },
+    elf2: { img: 'elf2' },
+    elf3: { img: 'elf3', caster: true, bolt: '#57c8ff', castFrame: 7 },
+    warrior1: { img: 'warrior1' }, warrior2: { img: 'warrior2' },
+    warrior3: { img: 'warrior3', caster: true, boltImg: 'warrior3_bolt', boltLevel: true, castFrame: 6 },
+    pirate1: { img: 'pirate1', dmg: [8, 9] },
+    pirate2: { img: 'pirate2', caster: true, boltImg: 'pirate2_bolt', boltScale: 2, castFrame: 8 },
+    pirate3: { img: 'pirate3', dmg: [8, 9] },
   };
   for (const ek in ETYPES){
     const t = ETYPES[ek];
@@ -705,6 +719,7 @@
     // The ready pose doubles as the trans-A entry telegraph
     t.seq = t.seq || [0,1,2,3,4,5,6,7,8,9];
     t.entry = t.entry || [t.seq[0]];
+    t.dmg = t.dmg || [4, 7];   // progs whose strips hit, tuned so overhead swings land on the way down
   }
   // weapon hitboxes measured from the sheets as vertical strips hugging the
   // weapon, world px [dx from center, dy from feet (negative up), w, h]
@@ -717,15 +732,23 @@
     troll3: [[[12, -74, 8, 72], [20, -69, 8, 34], [28, -93, 24, 52], [52, -64, 8, 20]], [[12, -74, 8, 72], [20, -98, 8, 64], [28, -102, 16, 52], [44, -80, 8, 28], [52, -70, 8, 16]], [[12, -108, 8, 106], [20, -108, 8, 75], [28, -101, 8, 45], [36, -88, 16, 28], [52, -68, 8, 1]], [[12, -106, 8, 104], [20, -98, 8, 66], [28, -95, 8, 34], [36, -92, 8, 23], [44, -84, 8, 9]], [[12, -98, 8, 97], [20, -98, 8, 69], [28, -95, 8, 26], [36, -92, 8, 9]], [[12, -74, 8, 72], [20, -72, 8, 42], [28, -61, 8, 19], [36, -90, 24, 53]], [[12, -74, 8, 72], [20, -72, 8, 62], [28, -28, 8, 18], [36, -34, 24, 17]], [[12, -74, 8, 72], [20, -72, 8, 61], [28, -42, 8, 28], [36, -34, 8, 18], [44, -48, 16, 22], [60, -46, 8, 12]], [[12, -74, 8, 72], [20, -72, 8, 46], [28, -48, 16, 31], [44, -62, 8, 37], [52, -64, 8, 23], [60, -63, 8, 14]], [[12, -74, 8, 72], [20, -70, 8, 36], [28, -56, 16, 28], [44, -79, 8, 52], [52, -80, 8, 40], [60, -72, 8, 2]]],
     skel1: [[[12, -62, 8, 60], [20, -53, 8, 34], [28, -54, 16, 20]], [[12, -68, 16, 38], [28, -67, 8, 20]], [[12, -76, 16, 40]], [[12, -80, 8, 38], [20, -60, 8, 10]], [[12, -74, 8, 34], [20, -59, 8, 7]], [[12, -74, 24, 40]], [[12, -74, 8, 70], [20, -68, 8, 52], [28, -37, 16, 20], [44, -34, 8, 9]], [[12, -71, 8, 68], [20, -64, 8, 49], [28, -38, 16, 20], [44, -36, 8, 9]], [[12, -68, 8, 66], [20, -62, 8, 46], [28, -44, 16, 20], [44, -40, 8, 6]], [[12, -66, 8, 64], [20, -60, 8, 43], [28, -49, 16, 21]]],
     skel2: [[[12, -56, 8, 52], [20, -55, 8, 32], [28, -55, 8, 15], [36, -50, 8, 2]], [[12, -66, 16, 40], [28, -62, 8, 2]], [[12, -74, 16, 39]], [[12, -66, 16, 22]], [[12, -62, 16, 20]], [[12, -71, 16, 39], [28, -45, 8, 2]], [[12, -68, 8, 65], [20, -63, 8, 46], [28, -40, 16, 14]], [[12, -68, 8, 64], [20, -31, 8, 14], [28, -41, 16, 15]], [[12, -67, 8, 64], [20, -36, 8, 16], [28, -46, 16, 17]], [[12, -64, 8, 61], [20, -49, 8, 29], [28, -50, 8, 18], [36, -49, 8, 8]]],
-    skel3: [[[12, -70, 8, 56], [20, -70, 8, 38]], [[12, -76, 8, 50], [20, -48, 8, 24]], [[12, -66, 8, 41], [20, -56, 8, 20], [28, -38, 8, 5]], [[12, -66, 8, 41], [20, -59, 8, 14], [28, -48, 8, 6]], [[12, -74, 8, 51], [20, -58, 8, 13], [28, -51, 8, 5]], [[12, -76, 8, 56], [20, -54, 8, 30]], [[12, -74, 8, 58], [20, -72, 8, 47], [28, -49, 16, 21]], [[12, -74, 8, 57], [20, -70, 8, 45], [28, -52, 16, 20]], [[12, -73, 8, 57], [20, -66, 8, 38], [28, -60, 16, 20]], [[12, -72, 8, 56], [20, -66, 8, 36], [28, -65, 8, 16]]]
+    skel3: [[[12, -70, 8, 56], [20, -70, 8, 38]], [[12, -76, 8, 50], [20, -48, 8, 24]], [[12, -66, 8, 41], [20, -56, 8, 20], [28, -38, 8, 5]], [[12, -66, 8, 41], [20, -59, 8, 14], [28, -48, 8, 6]], [[12, -74, 8, 51], [20, -58, 8, 13], [28, -51, 8, 5]], [[12, -76, 8, 56], [20, -54, 8, 30]], [[12, -74, 8, 58], [20, -72, 8, 47], [28, -49, 16, 21]], [[12, -74, 8, 57], [20, -70, 8, 45], [28, -52, 16, 20]], [[12, -73, 8, 57], [20, -66, 8, 38], [28, -60, 16, 20]], [[12, -72, 8, 56], [20, -66, 8, 36], [28, -65, 8, 16]]],
+    orc1: [[[12, -64, 8, 52], [20, -39, 16, 28], [36, -30, 8, 18]], [[12, -64, 8, 52], [20, -48, 24, 34], [44, -36, 8, 15]], [[12, -64, 8, 46], [20, -58, 16, 40], [36, -56, 16, 26], [52, -46, 8, 9]], [[12, -68, 32, 42], [44, -64, 16, 18]], [[12, -81, 32, 44], [44, -80, 8, 16]], [[12, -88, 8, 51], [20, -93, 16, 46], [36, -82, 8, 31]], [[12, -98, 8, 61], [20, -92, 8, 38], [28, -76, 8, 16]], [[12, -66, 8, 28], [20, -74, 24, 42], [44, -74, 8, 18]], [[12, -65, 8, 54], [20, -38, 8, 20], [28, -40, 16, 28], [44, -22, 8, 6]], [[12, -64, 8, 52], [20, -39, 24, 28]]],
+    orc2: [[[12, -72, 8, 60], [20, -64, 8, 52], [28, -31, 16, 19], [44, -43, 16, 22]], [[12, -73, 8, 52], [20, -64, 8, 49], [28, -40, 16, 23], [44, -49, 8, 21], [52, -56, 8, 23]], [[12, -73, 8, 46], [20, -64, 8, 40], [28, -45, 16, 25], [44, -68, 8, 42], [52, -66, 8, 26]], [[12, -73, 8, 46], [20, -65, 8, 32], [28, -51, 8, 21], [36, -80, 16, 51], [52, -70, 8, 16]], [[12, -73, 8, 46], [20, -88, 24, 53], [44, -79, 8, 38]], [[12, -92, 8, 65], [20, -91, 8, 56], [28, -89, 8, 43], [36, -75, 8, 26], [44, -68, 8, 16]], [[12, -91, 8, 64], [20, -86, 8, 52], [28, -79, 8, 26], [36, -72, 8, 10]], [[12, -74, 8, 47], [20, -66, 8, 31], [28, -85, 24, 50]], [[12, -73, 8, 61], [20, -65, 8, 52], [28, -32, 16, 20], [44, -38, 8, 18], [52, -45, 8, 21]], [[12, -73, 8, 61], [20, -64, 8, 52], [28, -30, 16, 18], [44, -44, 16, 22]]],
+    orc3: [[[12, -66, 8, 52], [20, -40, 24, 30]], [[12, -66, 8, 50], [20, -49, 24, 30], [44, -33, 8, 10]], [[12, -66, 8, 46], [20, -59, 16, 40], [36, -59, 8, 30], [44, -48, 8, 16], [52, -45, 8, 2]], [[12, -70, 24, 44], [36, -64, 16, 22]], [[12, -81, 32, 44], [44, -72, 8, 7]], [[12, -84, 8, 48], [20, -92, 16, 45]], [[12, -94, 8, 58], [20, -82, 8, 28], [28, -68, 8, 7]], [[12, -70, 8, 34], [20, -76, 16, 44], [36, -74, 8, 35], [44, -74, 8, 20]], [[12, -66, 8, 53], [20, -41, 24, 30], [44, -22, 8, 4]], [[12, -66, 8, 52], [20, -40, 24, 30], [44, -20, 8, 2]]],
+    elf2: [[[12, -70, 8, 67], [20, -59, 8, 38], [28, -62, 8, 32]], [[12, -72, 8, 70], [20, -69, 8, 42], [28, -46, 8, 14]], [[12, -68, 8, 64], [20, -57, 8, 22], [28, -44, 8, 2]], [[12, -68, 8, 31], [20, -56, 8, 12]], [[12, -70, 8, 67], [20, -68, 8, 45], [28, -64, 8, 29]], [[12, -72, 8, 68], [20, -63, 8, 42], [28, -32, 16, 11]], [[12, -72, 8, 69], [20, -64, 8, 40], [28, -38, 16, 12]], [[12, -72, 8, 68], [20, -64, 8, 46], [28, -43, 16, 14]], [[12, -72, 8, 68], [20, -45, 8, 24], [28, -50, 16, 18]], [[12, -71, 8, 68], [20, -56, 16, 35], [36, -56, 8, 11]]],
+    warrior1: [[[12, -64, 8, 62], [20, -55, 8, 35], [28, -54, 8, 25]], [[12, -64, 8, 62], [20, -60, 8, 35], [28, -38, 8, 11]], [[12, -63, 8, 61], [20, -54, 8, 26], [28, -42, 8, 12]], [[12, -64, 8, 62], [20, -52, 8, 18]], [[12, -64, 8, 62]], [[12, -66, 8, 64], [20, -59, 8, 30], [28, -43, 8, 8]], [[12, -66, 8, 64], [20, -61, 8, 44], [28, -50, 8, 26]], [[12, -66, 8, 64], [20, -61, 8, 45], [28, -30, 16, 8]], [[12, -66, 8, 64], [20, -60, 8, 41], [28, -28, 16, 8]], [[12, -66, 8, 64], [20, -36, 8, 20], [28, -42, 8, 14], [36, -43, 8, 4]]],
+    warrior2: [[[12, -68, 8, 66], [20, -50, 8, 28]], [[12, -68, 8, 66], [20, -51, 8, 23]], [[12, -68, 8, 66], [20, -50, 8, 16]], [[12, -68, 8, 66], [20, -52, 8, 12]], [[12, -68, 8, 66], [20, -50, 8, 8]], [[12, -70, 8, 67], [20, -51, 8, 18]], [[12, -70, 8, 68], [20, -66, 8, 44], [28, -42, 8, 10]], [[12, -70, 8, 68], [20, -66, 8, 44], [28, -32, 8, 4]], [[12, -70, 8, 68], [20, -64, 8, 42], [28, -30, 8, 1]], [[12, -69, 8, 66], [20, -48, 8, 26]]],
+    pirate1: [[[12, -72, 8, 70], [20, -62, 8, 52], [28, -33, 8, 18], [36, -43, 8, 19], [44, -56, 8, 28], [52, -52, 8, 16]], [[12, -72, 8, 70], [20, -62, 8, 52], [28, -33, 8, 18], [36, -43, 8, 19], [44, -56, 8, 28], [52, -52, 8, 16]], [[12, -68, 8, 64], [20, -76, 16, 54], [36, -72, 8, 30]], [[12, -80, 8, 76], [20, -73, 8, 40], [28, -48, 8, 10]], [[12, -80, 8, 76], [20, -73, 8, 40], [28, -48, 8, 10]], [[12, -60, 16, 54]], [[12, -81, 8, 78], [20, -80, 8, 64], [28, -71, 8, 38]], [[12, -81, 8, 78], [20, -80, 8, 64], [28, -71, 8, 38]], [[12, -70, 24, 70], [36, -62, 8, 59], [44, -20, 24, 18]], [[12, -72, 8, 70], [20, -72, 8, 64], [28, -62, 8, 50], [36, -30, 16, 16], [52, -39, 8, 22], [60, -39, 8, 14]]],
+    pirate3: [[[12, -52, 8, 50], [20, -39, 8, 30], [28, -36, 8, 7]], [[12, -52, 8, 50], [20, -39, 8, 30], [28, -36, 8, 7]], [[12, -54, 8, 50], [20, -54, 8, 20], [28, -44, 8, 15]], [[12, -62, 8, 56], [20, -59, 16, 8]], [[12, -62, 8, 56], [20, -59, 16, 8]], [[12, -66, 8, 60], [20, -12, 8, 2]], [[12, -61, 16, 58], [28, -53, 8, 10]], [[12, -61, 16, 58], [28, -53, 8, 10]], [[12, -70, 8, 70], [20, -68, 8, 62], [28, -55, 8, 1]], [[12, -70, 8, 70], [20, -28, 8, 19], [28, -26, 8, 8]]]
   };
   for (const ek in KN_WEAPON){
     const t = ETYPES[ek];
     t.weapon = KN_WEAPON[ek];
-    // reach counts only damage-window frames, or he'd stop at windup range and whiff
+    // reach counts only the damage-window frames, or he'd stop at windup range and whiff
     t.reachBoxes = [];
     let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
-    for (const pIdx of [4, 5, 6, 7]) for (const b of t.weapon[t.seq[pIdx]]){
+    for (let pIdx = t.dmg[0]; pIdx <= t.dmg[1]; pIdx++) for (const b of t.weapon[t.seq[pIdx]]){
       t.reachBoxes.push(b);
       x0 = Math.min(x0, b[0]); y0 = Math.min(y0, b[1]);
       x1 = Math.max(x1, b[0] + b[2]); y1 = Math.max(y1, b[1] + b[3]);
@@ -765,25 +788,32 @@
       route: null, pathT: 0, routeAge: 0, lastPN: -1, settleX: null, goalHome: false, patDir: 1, patT: 0,
       jmpCd: 0, wasGround: true, jumpFrom: null, jumpFails: 0,
       lungeCd: 0, lungeT: 0, lungeDash: 0, lungeHit: false, dashPrevX: null,
-      readyT: 0, settleT: 0, wasGuard: false,
+      readyT: 0, settleT: 0, wasGuard: false, reengageT: 0,
       castKind: 0, summonCd: 0, summoner: null,
       stranded: false, gaveUp: false, dead: false, dieT: 0, holdT: 0 };
   }
   // the sandbox starts empty now, enemies come from the spawn menu (key 1)
   function freshKnights(){ return []; }
   const knights = freshKnights();
-  const bolts = [];   // necromancer projectiles
+  const bolts = [];   // caster projectiles
   function liveSummons(k){
     let n = 0;
     for (const e of knights) if (e.summoner === k && !e.dead) n++;
     return n;
   }
   function castBolt(k){
-    const sx = k.x + k.w/2 + k.face*0.55*TILE, sy = k.y + 0.35*k.h;
+    // BOLT_FROM (baked) is the sheet arrow's launch point, so the engine
+    // projectile continues exactly where the animation's arrow was
+    const bf = k.T.meta.BOLT_FROM;
+    const sx = k.x + k.w/2 + k.face*(bf ? bf[0] : 0.55*TILE);
+    const sy = bf ? k.y + k.h + bf[1] : k.y + 0.35*k.h;
     const dx = (P.x + P.w/2) - sx, dy = (P.y + P.h/2) - sy;
     const d = Math.hypot(dx, dy) || 1;
     const spd = 0.9*U;
-    bolts.push({ x: sx, y: sy, vx: dx/d*spd, vy: dy/d*spd, life: SEC(3), col: k.T.bolt });
+    let vx = dx/d*spd, vy = dy/d*spd;
+    // archers loose flat like their animation when the target is near their level
+    if (k.T.boltLevel && Math.abs(dy) < 0.35*TILE){ vx = (dx < 0 ? -1 : 1)*spd; vy = 0; }
+    bolts.push({ x: sx, y: sy, vx, vy, life: SEC(3), col: k.T.bolt, img: k.T.boltImg, scl: k.T.boltScale || 1 });
   }
   function summonSkeleton(k){
     const h = Math.round(1.125*TILE), w = Math.round(0.6*TILE);
@@ -913,8 +943,11 @@
       // aggro on sight in the same band and screen, dropped when the player leaves the band
       const sameBand = bandOf(P.y + P.h/2) === bandOf(k.y + k.h/2);
       const sameScreen = sameBand && Math.floor((P.x + P.w/2)/VIEW_W) === Math.floor((k.x + k.w/2)/VIEW_W);
-      // once he gives up on an unreachable player he re-engages only when a path exists
-      if (sameScreen && (k.aggro || !k.gaveUp || routeTo(k, P).ok)) k.aggro = true;
+      // once he gives up on an unreachable player he re-engages only when a path exists.
+      // that path test floods the grid, so throttle it instead of running it every frame
+      let canEngage = k.aggro || !k.gaveUp;
+      if (!canEngage && sameScreen && --k.reengageT <= 0){ k.reengageT = AI_REPATH; canEngage = routeTo(k, P).ok; }
+      if (sameScreen && canEngage) k.aggro = true;
       else if (!sameBand) k.aggro = false;
       if (k.atkCd > 0) k.atkCd--;
       if (k.summonCd > 0) k.summonCd--;
@@ -969,11 +1002,11 @@
         k.frame = k.T.seq[prog];
         if (k.castKind){
           // the bolt fires on its launch frame, the summon as it rises
-          if (!k.didHit && prog >= (k.castKind === 2 ? 7 : 5)){
+          if (!k.didHit && prog >= (k.castKind === 2 ? 7 : (k.T.castFrame || 5))){
             k.didHit = true;
             if (k.castKind === 2) summonSkeleton(k); else castBolt(k);
           }
-        } else if (!k.didHit && prog >= 4 && prog <= 7){
+        } else if (!k.didHit && prog >= k.T.dmg[0] && prog <= k.T.dmg[1]){
           // this frame's weapon strips do the hitting
           if (!P.boost && k.T.weapon){
             for (const b of k.T.weapon[k.frame] || []){
@@ -1003,7 +1036,7 @@
           k.face = dxp < 0 ? -1 : 1;
           k.vx = 0;
           if (k.atkCd <= 0){
-            const kind = (k.summonCd <= 0 && liveSummons(k) < SUMMON_MAX) ? 2 : 1;
+            const kind = (k.T.summon && k.summonCd <= 0 && liveSummons(k) < SUMMON_MAX) ? 2 : 1;
             if (kind === 2) k.summonCd = SUMMON_CD;
             beginAttack(k, kind);
           }
@@ -1351,12 +1384,15 @@
       }
     }
 
-    // save stations: arm when you step off, save once when you land on one
+    // save stations: usable once per visit. A station re-arms only once it has
+    // scrolled completely off screen, so it can't relight during a screen transition
     for (let i = 0; i < STATIONS.length; i++){
       const st = STATIONS[i];
       const r = { x: st.tx*TILE, y: (st.fr-1)*TILE, w: TILE, h: TILE };
-      if (overlaps(P, r)){ if (st.armed && P.onGround){ st.armed = false; doSave(i); } }
-      else st.armed = true;
+      const sx = st.tx*TILE - cam.x, sy = st.fr*TILE - cam.y;   // station footprint in screen space
+      const offScreen = sx + TILE <= 0 || sx >= VIEW_W || sy <= 0 || sy - TILE >= VIEW_H;
+      if (offScreen) st.armed = true;
+      if (overlaps(P, r) && st.armed && P.onGround){ st.armed = false; doSave(i); }
     }
 
     // how long left click has been held, so a power shot winds up only on a deliberate hold
@@ -1504,10 +1540,11 @@
 
   // ---------- rendering ----------
   // daytime backdrop, painted once and repeated for every screen section
-  const BG = document.createElement('canvas');
-  BG.width = VIEW_W; BG.height = VIEW_H;
-  (function paintBG(){
-    const g = BG.getContext('2d');
+  const ROOM_RAISE = [0, TILE, 2*TILE];   // per region 0/1/2: bg ground meets a floor 1/2/3 tiles up
+  function makeBG(R){
+    const cv = document.createElement('canvas');
+    cv.width = VIEW_W; cv.height = VIEW_H;
+    const g = cv.getContext('2d');
     const grad = g.createLinearGradient(0, 0, 0, VIEW_H);
     grad.addColorStop(0, '#4e9fe0'); grad.addColorStop(0.7, '#a8d8f4'); grad.addColorStop(1, '#cdeffc');
     g.fillStyle = grad; g.fillRect(0, 0, VIEW_W, VIEW_H);
@@ -1538,31 +1575,46 @@
       g.fillStyle = '#5b4226';
       g.fillRect(x - s*0.12, y, s*0.24, s*0.45);
     }
+    // hills wrap at +/- one screen so the silhouette is continuous where the
+    // backdrop repeats horizontally (no seam at the screen boundary)
+    const gEll = (cx, cy, rx, ry) => { for (const ox of [0, -VIEW_W, VIEW_W]){ g.beginPath(); g.ellipse(cx + ox, cy, rx, ry, 0, 0, Math.PI*2); g.fill(); } };
+    // ground (hills + pines) rides up per room so it meets that room's floor; the
+    // sky and clouds stay put, so the empty gap between them just shrinks
+    g.save(); g.translate(0, -R);
     g.fillStyle = '#69a857';
-    g.beginPath(); g.ellipse(700, VIEW_H + 60, 420, 260, 0, 0, Math.PI*2); g.fill();
+    gEll(700, VIEW_H + 60, 420, 260);
     hillPine(640, 470, 26); hillPine(820, 500, 32); hillPine(930, 545, 24);
     g.fillStyle = '#7fbf6a';
-    g.beginPath(); g.ellipse(180, VIEW_H + 40, 340, 220, 0, 0, Math.PI*2); g.fill();
+    gEll(180, VIEW_H + 40, 340, 220);
     hillPine(90, 505, 30); hillPine(230, 490, 36); hillPine(340, 545, 26);
-  })();
+    g.restore();
+    return cv;
+  }
+  const BG_R = ROOM_RAISE.map(makeBG);
+  const BG = BG_R[0];
   // sandbox2 backdrop, painted once like BG. Only the rain animates
-  const BG_NIGHT = document.createElement('canvas');
-  BG_NIGHT.width = VIEW_W; BG_NIGHT.height = VIEW_H;
-  (function paintBGNight(){
-    const g = BG_NIGHT.getContext('2d');
+  function makeNightBG(R){
+    const cv = document.createElement('canvas');
+    cv.width = VIEW_W; cv.height = VIEW_H;
+    const g = cv.getContext('2d');
     const grad = g.createLinearGradient(0, 0, 0, VIEW_H);
     grad.addColorStop(0, '#0e1014'); grad.addColorStop(1, '#282e32');
     g.fillStyle = grad; g.fillRect(0, 0, VIEW_W, VIEW_H);
-    // hazy moon
+    // hazy moon (fixed, never raised, so it stays in view)
     const mg = g.createRadialGradient(160, 90, 6, 160, 90, 80);
     mg.addColorStop(0, 'rgba(200,206,214,0.45)'); mg.addColorStop(0.45, 'rgba(200,206,214,0.14)'); mg.addColorStop(1, 'rgba(200,206,214,0)');
     g.fillStyle = mg; g.fillRect(50, -20, 220, 220);
     g.fillStyle = '#c8ced6';
     g.beginPath(); g.arc(160, 90, 30, 0, Math.PI*2); g.fill();
-    // hills
+    // everything below the moon (hills, chapel, gravestones, fog) rides up per room
+    g.save(); g.translate(0, -R);
+    // hills wrap at +/- one screen so they stay continuous where the backdrop
+    // repeats horizontally (this is the seam the graveyard sky used to show)
+    const gEll = (cx, cy, rx, ry) => { for (const ox of [0, -VIEW_W, VIEW_W]){ g.beginPath(); g.ellipse(cx + ox, cy, rx, ry, 0, 0, Math.PI*2); g.fill(); } };
     g.fillStyle = '#141a1c';
-    g.beginPath(); g.ellipse(180, 642, 380, 210, 0, 0, Math.PI*2); g.fill();
-    g.beginPath(); g.ellipse(800, 677, 380, 215, 0, 0, Math.PI*2); g.fill();
+    gEll(180, 642, 380, 210);
+    gEll(470, 690, 380, 225);   // mid rise fills the hard valley left of the chapel
+    gEll(800, 677, 380, 215);
     // chapel silhouette on the far hill
     g.fillStyle = '#0e1214';
     g.fillRect(610, 435, 90, 70);
@@ -1577,24 +1629,37 @@
     }
     // fog bands, soft radial blobs
     function fogBand(cy, ry, alpha){
-      for (const c of [[VIEW_W*0.28, VIEW_W*0.55], [VIEW_W*0.78, VIEW_W*0.55]]){
-        g.save();
-        g.translate(c[0], cy); g.scale(c[1]/100, ry/100);
-        const fg = g.createRadialGradient(0, 0, 10, 0, 0, 100);
-        fg.addColorStop(0, 'rgba(190,200,210,' + alpha + ')');
-        fg.addColorStop(1, 'rgba(190,200,210,0)');
-        g.fillStyle = fg;
-        g.beginPath(); g.arc(0, 0, 100, 0, Math.PI*2); g.fill();
-        g.restore();
-      }
+      for (const c of [[VIEW_W*0.28, VIEW_W*0.55], [VIEW_W*0.78, VIEW_W*0.55]])
+        for (const ox of [0, -VIEW_W, VIEW_W]){   // wrap so the fog has no seam either
+          g.save();
+          g.translate(c[0] + ox, cy); g.scale(c[1]/100, ry/100);
+          const fg = g.createRadialGradient(0, 0, 10, 0, 0, 100);
+          fg.addColorStop(0, 'rgba(190,200,210,' + alpha + ')');
+          fg.addColorStop(1, 'rgba(190,200,210,0)');
+          g.fillStyle = fg;
+          g.beginPath(); g.arc(0, 0, 100, 0, Math.PI*2); g.fill();
+          g.restore();
+        }
     }
     fogBand(500, 74, 0.30);
     fogBand(592, 66, 0.42);
-  })();
+    // haze settles into the low ground so pits and holes read as fog, not black.
+    // Reaches well past the bottom so the per-room raise never lifts it off screen.
+    const lowFog = g.createLinearGradient(0, 540, 0, 760);
+    lowFog.addColorStop(0, 'rgba(188,198,208,0)');
+    lowFog.addColorStop(0.55, 'rgba(182,193,205,0.22)');
+    lowFog.addColorStop(1, 'rgba(176,189,201,0.34)');
+    g.fillStyle = lowFog;
+    g.fillRect(0, 540, VIEW_W, 260);
+    g.restore();
+    return cv;
+  }
+  const BG_NIGHT_R = ROOM_RAISE.map(makeNightBG);
+  const BG_NIGHT = BG_NIGHT_R[0];
   // per-map theme: tiles, tree colors (the crown bakes lazily per theme), backdrop, weather
   const THEMES = [
-    { grass: IMG.grass,  dirt: IMG.dirt,  bark: IMG.bark,  leaf: IMG.leaf,  bg: BG,       rain: false, crown: null },
-    { grass: IMG.ngrass, dirt: IMG.ndirt, bark: IMG.nbark, leaf: IMG.nleaf, bg: BG_NIGHT, rain: true,  crown: null },
+    { grass: IMG.grass,  dirt: IMG.dirt,  bark: IMG.bark,  leaf: IMG.leaf,  bg: BG,       bgR: BG_R,       rain: false, crown: null },
+    { grass: IMG.ngrass, dirt: IMG.ndirt, bark: IMG.nbark, leaf: IMG.nleaf, bg: BG_NIGHT, bgR: BG_NIGHT_R, rain: true,  crown: null },
   ];
   let theme = THEMES[0];
   // storm rain, advanced on real time like the star field so speed ignores refresh rate
@@ -1619,9 +1684,10 @@
     ctx.stroke();
   }
   function drawBackground(){
+    const bg = theme.bgR[Math.max(0, Math.min(theme.bgR.length - 1, camRegion))];   // ground raised to meet this room's floor
     const off = ((cam.x % VIEW_W) + VIEW_W) % VIEW_W;
-    ctx.drawImage(theme.bg, -off, 0);
-    if (off) ctx.drawImage(theme.bg, VIEW_W - off, 0);
+    ctx.drawImage(bg, -off, 0);
+    if (off) ctx.drawImage(bg, VIEW_W - off, 0);
     if (theme.rain && camRegion !== 2) drawRain();   // no rain down in the underground band
   }
   // cloud crown, drawn in front of the player and arrows, pinned into the trunk top.
@@ -1701,11 +1767,21 @@
   function drawBolts(){
     for (const b of bolts){
       ctx.save();
-      ctx.shadowColor = b.col; ctx.shadowBlur = 12;
-      ctx.fillStyle = b.col;
-      ctx.beginPath(); ctx.arc(b.x - cam.x, b.y - cam.y, 5, 0, Math.PI*2); ctx.fill();
-      ctx.fillStyle = '#ffffff';
-      ctx.beginPath(); ctx.arc(b.x - cam.x, b.y - cam.y, 2.4, 0, Math.PI*2); ctx.fill();
+      ctx.translate(b.x - cam.x, b.y - cam.y);
+      if (b.img){
+        // the projectile lifted from this enemy's own sheet, flown along the shot
+        ctx.rotate(Math.atan2(b.vy, b.vx));
+        const im = IMG[b.img], w = im.width/SS*b.scl, h = im.height/SS*b.scl;
+        ctx.imageSmoothingEnabled = true;
+        ctx.drawImage(im, -w/2, -h/2, w, h);
+        ctx.imageSmoothingEnabled = false;
+      } else {
+        ctx.shadowColor = b.col; ctx.shadowBlur = 12;
+        ctx.fillStyle = b.col;
+        ctx.beginPath(); ctx.arc(0, 0, 5, 0, Math.PI*2); ctx.fill();
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath(); ctx.arc(0, 0, 2.4, 0, Math.PI*2); ctx.fill();
+      }
       ctx.restore();
     }
   }
@@ -2582,7 +2658,9 @@
   const LOADING_MIN_MS = 2000;
   const loadingStart = performance.now();
   const loadingEl = document.getElementById('loading-overlay');
-  const imgKeys = ['archer','bowarm','grass','dirt','arrow','bark','leaf','knight','ngrass','ndirt','nbark','nleaf'].concat(['knight2','knight3','troll1','troll2','troll3','skel1','skel2','skel3','necro1','necro2','necro3']);
+  const imgKeys = ['archer','bowarm','grass','dirt','arrow','bark','leaf','knight','ngrass','ndirt','nbark','nleaf'].concat(['knight2','knight3','troll1','troll2','troll3','skel1','skel2','skel3','necro1','necro2','necro3',
+    'orc1','orc2','orc3','elf1','elf2','elf3','warrior1','warrior2','warrior3','pirate1','pirate2','pirate3',
+    'elf1_bolt','warrior3_bolt','pirate2_bolt']);
   const imagesReady = Promise.all(imgKeys.map(k => new Promise(res => {
     IMG[k].onload = res;
     IMG[k].onerror = () => { console.error('asset failed to decode: ' + k); res(); };
