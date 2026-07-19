@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Bake the pine tree tiles (style C, "pine tiered") and embed them into ../assets.js
+Bake the pine tree tiles (style C, "pine tiered") and embed them into ../assets/js/assets.js
 as ASSETS.bark and ASSETS.leaf. Rerun any time; deterministic seeds.
 Usage: python3 build_tree_tiles.py
 """
@@ -45,7 +45,7 @@ here = os.path.dirname(os.path.abspath(__file__))
 bark = bark_tile(); leaf = leaf_tile()
 bark.save(os.path.join(here, 'tiles', 'bark.png'))
 leaf.save(os.path.join(here, 'tiles', 'leaf.png'))
-aj = os.path.join(os.path.dirname(here), 'assets.js')
+aj = os.path.join(here, 'js', 'assets.js')
 s = open(aj).read()
 for key, img in (('bark', bark), ('leaf', leaf)):
     if '"%s":' % key in s:

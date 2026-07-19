@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Bake the chosen sound effects into ../assets.js as sfx_* data URLs.
+Bake the chosen sound effects into ../assets/js/assets.js as sfx_* data URLs.
 Sources live in _sfx/ (see _sfx/synth*.py). Rerun after changing a pick.
 Usage: python3 build_sfx.py
 """
@@ -14,7 +14,7 @@ PICKS = {
     'sfx_dirt': '_sfx/dirt_a.wav',
     'sfx_wood': '_sfx/wood_final.wav',  # trimmed bullet-impact-wood sample
 }
-aj = os.path.join(os.path.dirname(here), 'assets.js')
+aj = os.path.join(here, 'js', 'assets.js')
 s = open(aj).read()
 for key, rel in PICKS.items():
     data = 'data:audio/wav;base64,' + base64.b64encode(open(os.path.join(here, rel), 'rb').read()).decode()

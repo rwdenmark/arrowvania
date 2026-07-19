@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Generate the sandbox3 castle tiles and inject them into ../assets.js.
+Generate the sandbox3 castle tiles and inject them into ../assets/js/assets.js.
 Three 64x64 tiles, chunky 2px texels, all seamless:
   castle_cap  - mossy capstone walk surface (grass slot), 3D lip + contact
                 shadow over the sett fill in the same tile
@@ -17,7 +17,7 @@ T, S = 32, 2          # 32 texels at 2px = 64px tile
 CAP_H = 11            # cap band height in texels
 
 here = os.path.dirname(os.path.abspath(__file__))
-aj = os.path.join(os.path.dirname(here), 'assets.js')
+aj = os.path.join(here, 'js', 'assets.js')
 s = open(aj, encoding='utf-8').read()
 
 def h2(x, y, salt=0):

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Regenerate the sandbox2 night tiles and re-inject them into ../assets.js.
+Regenerate the sandbox2 night tiles and re-inject them into ../assets/js/assets.js.
 The night theme is a palette remap of the embedded sandbox1 day tiles, so the
 texture stays pixel-identical. Also writes tiles/night_*.png as source copies.
 Usage: python3 build_night_tiles.py   (needs Pillow)
@@ -11,7 +11,7 @@ import base64, io, os, re
 from PIL import Image
 
 here = os.path.dirname(os.path.abspath(__file__))
-aj = os.path.join(os.path.dirname(here), 'assets.js')
+aj = os.path.join(here, 'js', 'assets.js')
 s = open(aj, encoding='utf-8').read()
 
 def grab(key):

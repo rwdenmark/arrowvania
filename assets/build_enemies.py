@@ -31,7 +31,7 @@ RANGED = {'elf1': (7, True, 8), 'elf3': (7, True, None), 'warrior3': (6, True, 9
           'pirate2': (8, False, 9)}
 
 here = os.path.dirname(os.path.abspath(__file__))
-root = os.path.dirname(here)
+root = os.path.join(here, 'js')   # baked packs live in assets/js
 Z = { k: zipfile.ZipFile(p) for k, p in
       zip(['kn', 'tr', 'nc', 'or', 'el', 'wa', 'pi'], sys.argv[1:8]) }
 
@@ -212,6 +212,19 @@ for key, name, zk, prefix, rows, alias, pre, native in ENEMIES:
             b = im.getbbox()
             if b: minx, maxx = min(minx, b[0]), max(maxx, b[2])
         wide_rows.append(row)
+    # ground the death animation: several packs (trolls, elves) lift the
+    # toppling body off the baseline, leaving the corpse floating in game.
+    # Shift any DIE frame whose content ends above the feet line down onto it.
+    # elf3's pack also ends on a bad final frame (the corpse pops back
+    # upright), so it holds frame 8 instead
+    die = rows.index('DIE')
+    if key == 'elf3': wide_rows[die][9] = wide_rows[die][8].copy()
+    for c, im in enumerate(wide_rows[die]):
+        b = im.getbbox()
+        if b and b[3] < FEET_Y:
+            nf = Image.new('RGBA', im.size, (0,0,0,0))
+            nf.paste(im, (0, FEET_Y - b[3]))   # no mask: exact copy, no alpha blend
+            wide_rows[die][c] = nf
     x0 = minx - 4
     FW = maxx - x0 + 4
     FW += FW % 2

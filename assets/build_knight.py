@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Bake the Knight 1 sheet from the craftpix 2D Fantasy Knight pack and embed it in
-../assets.js as ASSETS.knight plus ASSETS.KNIGHT metadata. The knight is scaled
+../assets/js/assets.js as ASSETS.knight plus ASSETS.KNIGHT metadata. The knight is scaled
 so its idle height matches the archer's.
 
 Usage: python3 build_knight.py <path-to-extracted-knight-pack>
@@ -14,7 +14,6 @@ FEET_Y = 250
 ROWS = ['IDLE', 'WALK', 'RUN', 'JUMP', 'ATTACK', 'DIE', 'HURT']
 
 here = os.path.dirname(os.path.abspath(__file__))
-root = os.path.dirname(here)
 pack = os.path.join(sys.argv[1], '_PNG', '1_KNIGHT')
 
 # archer idle content height sets the knight scale
@@ -69,7 +68,7 @@ def durl(img):
 
 meta = { 'FW': FW, 'FH': FH, 'FRAMES': FRAMES, 'ROWS': ROWS,
          'anchorX': anchor_x, 'anchorY': FEET_Y }
-aj = os.path.join(root, 'assets.js')
+aj = os.path.join(here, 'js', 'assets.js')
 s = open(aj).read()
 s = re.sub(r'"knight": "data:image/png;base64,[^"]+", ', '', s)
 s = re.sub(r'"KNIGHT": \{[^}]*\}, ', '', s)

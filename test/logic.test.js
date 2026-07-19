@@ -1,8 +1,8 @@
-/* Headless tests for the pure game logic in logic.js.
+/* Headless tests for the pure game logic in src/logic.js.
    Zero dependencies, run with:  node --test  (Node 18+) */
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const LOGIC = require('../logic.js');
+const LOGIC = require('../src/logic.js');
 
 const TILE = 64, EPS = 0.01;
 

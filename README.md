@@ -14,9 +14,13 @@ Opens http://localhost:8080 in your browser. Any static file server works too, e
 
 Runs the logic suite in `test/` on Node's built-in runner (Node 18+). Use the scoped command so stray IDE build copies under `out/` are not picked up.
 
+## Layout
+
+`src/` holds the game code: `game.js` is the main loop, player, camera, and world rendering, `logic.js` the pure collision/movement/save-code library the tests cover, `path.js` the enemy route planning, `enemies.js` the roster, AI, and enemy drawing, `levels.js` the map layouts, `bg.js` the backdrop painters, `ui.js` the menus and overlay screens, and `audio.js` the sound effects, synth, and music. `assets/js/` holds the baked asset packs (`assets.js` plus one `assets_*.js` per enemy family), `assets/audio/` the menu music and click, and `assets/` the Python build scripts that regenerate the packs.
+
 ## Maps
 
-sandbox1 is the sunny prototype level. sandbox2 is the foggy-graveyard night theme with animated rain and its own tiles, on the same layout for now. `assets/build_night_tiles.py` regenerates the night tiles from the day set. sandbox3 is the daytime castle courtyard with its own layout: granite sett floors under mossy capstones, ivy ashlar boundary walls with animated torch sconces, a two-room dungeon, a stone tower room, a double-jump gate wall, and a castle backdrop with a waving pennant. `assets/build_castle_tiles.py` regenerates the castle tiles.
+sandbox1 is the sunny prototype level. sandbox2 is the foggy-graveyard night theme with animated rain and its own tiles, on the same layout for now. `assets/build_night_tiles.py` regenerates the night tiles from the day set.
 
 ## Saving
 
@@ -32,8 +36,8 @@ Twenty-four enemy types share one chassis with knight-1 stats: knights 1-3, trol
 
 ## Assets
 
-The archer is rebuilt from the Spriter rig in the craftpix 2D Fantasy Archer pack by `assets/build_sheet.py`. The knight comes from the craftpix 2D Fantasy Knight pack via `assets/build_knight.py`. Tree and terrain accents come from `assets/build_tree_tiles.py`. All of these regenerate `assets.js`, which embeds everything the game loads. The cursor comes from a Vecteezy game cursor set.
+The archer is rebuilt from the Spriter rig in the craftpix 2D Fantasy Archer pack by `assets/build_sheet.py`. The knight comes from the craftpix 2D Fantasy Knight pack via `assets/build_knight.py`. Tree and terrain accents come from `assets/build_tree_tiles.py`. All of these regenerate `assets/js/assets.js`, which embeds everything the game loads. The cursor comes from a Vecteezy game cursor set.
 
 ## Sound
 
-Sound effects are baked into `assets.js` by `assets/build_sfx.py`, most synthesized from scratch. The footsteps and the wood impact are trimmed from free sample packs, and the bow release is reused from my Recurve project. The charge hum, power-shot boom, bomb blast, and speed-boost shimmer are generated live with WebAudio. The menu button click (`card_select.mp3`) is reused from Recurve, and the menu music (`menu.mp3`) is a Pixabay track. Check the art, music, and sample licenses before distributing.
+Sound effects are baked into `assets/js/assets.js` by `assets/build_sfx.py`, most synthesized from scratch. The footsteps and the wood impact are trimmed from free sample packs, and the bow release is reused from my Recurve project. The charge hum, power-shot boom, bomb blast, and speed-boost shimmer are generated live with WebAudio. The menu button click (`card_select.mp3`) is reused from Recurve, and the menu music (`menu.mp3`) is a Pixabay track. Check the art, music, and sample licenses before distributing.

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Rebuild archer_sheet.png, bowarm_strip.png, and ../assets.js from the craftpix
+Rebuild archer_sheet.png, bowarm_strip.png, and ../assets/js/assets.js from the craftpix
 Spriter rig (archer 1) in craftpix-993351-2d-fantasy-archer-sprite-sheets.
 
 Usage:
@@ -210,8 +210,8 @@ def main():
         strip.alpha_composite(im, (f*K, 0))
     strip.save(os.path.join(os.path.dirname(__file__), 'bowarm_strip.png'))
 
-    # Regenerate ../assets.js, reusing the existing tile/arrow data URLs.
-    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    # Regenerate assets/js/assets.js, reusing the existing tile/arrow data URLs.
+    root = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'js')
     old = open(os.path.join(root,'assets.js')).read()
     def keep(key):
         m = re.search('"%s": "(data:image/png;base64,[^"]+)"' % key, old)
